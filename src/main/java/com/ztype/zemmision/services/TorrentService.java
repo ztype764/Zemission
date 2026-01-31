@@ -131,15 +131,7 @@ public class TorrentService {
         });
 
         try {
-            BtClient client = Bt.client()
-                    .torrent(torrentFile.toUri().toURL())
-                    .storage(storage)
-                    .autoLoadModules()
-                    .module(dhtModule)
-                    .afterTorrentFetched(t -> {
-                        logger.info("Torrent metadata fetched: {}", t.getName());
-                    })
-                    .build();
+            BtClient client = buildClient(storage, dhtModule, torrentFile);
 
             activeClients.put(playlist.getId(), client);
 
@@ -153,6 +145,19 @@ public class TorrentService {
             logger.error("Failed to start seeding", e);
             e.printStackTrace();
         }
+    }
+
+    protected BtClient buildClient(Storage storage, DHTModule dhtModule, Path torrentFile)
+            throws java.net.MalformedURLException {
+        return Bt.client()
+                .torrent(torrentFile.toUri().toURL())
+                .storage(storage)
+                .autoLoadModules()
+                .module(dhtModule)
+                .afterTorrentFetched(t -> {
+                    logger.info("Torrent metadata fetched: {}", t.getName());
+                })
+                .build();
     }
 
     public void stop(String playlistId) {

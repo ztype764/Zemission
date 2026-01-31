@@ -1,0 +1,121 @@
+package com.ztype.zemmision.services;
+
+import com.ztype.zemmision.models.Playlist;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class PlaylistServiceTest {
+
+    private MockDatabaseService databaseService;
+    private MockTorrentService torrentService;
+    private PlaylistService playlistService;
+
+    @BeforeEach
+    void setUp() {
+        databaseService = new MockDatabaseService();
+        torrentService = new MockTorrentService();
+        playlistService = new PlaylistService(databaseService, torrentService);
+    }
+
+    @Test
+    void testCreatePlaylist() throws IOException {
+        String name = "Test Playlist";
+        String desc = "Description";
+        File mockFile = new File("test.mp3");
+        List<File> files = Collections.singletonList(mockFile);
+
+        Playlist result = playlistService.createPlaylist(name, desc, files);
+
+        assertNotNull(result);
+        assertEquals(name, result.getName());
+        assertEquals(desc, result.getDescription());
+        assertEquals(1, result.getTracks().size());
+        assertEquals("test.mp3", result.getTracks().get(0).getTitle());
+
+        // Verify interactions
+        assertTrue(torrentService.createPlaylistTorrentCalled);
+        assertTrue(databaseService.savePlaylistCalled);
+        assertTrue(torrentService.startSeedingCalled);
+    }
+
+    @Test
+    void testUpdatePlaylist() {
+        Playlist playlist = new Playlist("Updated Name", "Updated Desc");
+        playlist.setId("some-id");
+
+        playlistService.updatePlaylist(playlist);
+
+        assertTrue(databaseService.savePlaylistCalled);
+        assertEquals("some-id", databaseService.lastSavedPlaylist.getId());
+    }
+
+    @Test
+    void testDeletePlaylist() {
+        String playlistId = "delete-me";
+
+        playlistService.deletePlaylist(playlistId);
+
+        assertTrue(torrentService.stopCalled);
+        assertEquals(playlistId, torrentService.lastStoppedId);
+        assertTrue(databaseService.deletePlaylistCalled);
+        assertEquals(playlistId, databaseService.lastDeletedId);
+    }
+
+    // Manual Mocks
+    static class MockDatabaseService extends DatabaseService {
+        boolean savePlaylistCalled = false;
+        boolean deletePlaylistCalled = false;
+        Playlist lastSavedPlaylist;
+        String lastDeletedId;
+
+        @Override
+        public void savePlaylist(Playlist playlist) {
+            savePlaylistCalled = true;
+            lastSavedPlaylist = playlist;
+        }
+
+        @Override
+        public void deletePlaylist(String id) {
+            deletePlaylistCalled = true;
+            lastDeletedId = id;
+        }
+    }
+
+    static class MockTorrentService extends TorrentService {
+        boolean createPlaylistTorrentCalled = false;
+        boolean startSeedingCalled = false;
+        boolean stopCalled = false;
+        String lastStoppedId;
+
+        @Override
+        public Path getStagingRoot() {
+            return Path.of("temp-staging");
+        }
+
+        @Override
+        public Path createPlaylistTorrent(Playlist playlist) throws IOException {
+            createPlaylistTorrentCalled = true;
+            return Path.of("temp.torrent");
+        }
+
+        @Override
+        public void startSeeding(Playlist playlist) {
+            startSeedingCalled = true;
+        }
+
+        @Override
+        public void stop(String playlistId) {
+            stopCalled = true;
+            lastStoppedId = playlistId;
+        }
+    }
+}

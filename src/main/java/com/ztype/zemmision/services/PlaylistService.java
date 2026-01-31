@@ -19,8 +19,12 @@ public class PlaylistService {
     private final TorrentService torrentService;
 
     public PlaylistService() {
-        this.databaseService = new DatabaseService();
-        this.torrentService = new TorrentService();
+        this(new DatabaseService(), new TorrentService());
+    }
+
+    public PlaylistService(DatabaseService databaseService, TorrentService torrentService) {
+        this.databaseService = databaseService;
+        this.torrentService = torrentService;
     }
 
     public Playlist createPlaylist(String name, String description, List<File> files) {
