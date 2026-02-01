@@ -4,9 +4,6 @@ import com.ztype.zemmision.models.Playlist;
 import com.ztype.zemmision.models.Track;
 import com.ztype.zemmision.services.PlaylistService;
 import com.ztype.zemmision.services.TorrentService;
-// import com.ztype.zemmision.utils.SvgLoader; // Removed SVG loader
-import javafx.application.Platform;
-import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
 import javafx.collections.FXCollections;
@@ -28,8 +25,6 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 public class MainController {
 
@@ -168,21 +163,6 @@ public class MainController {
                 // Larger icon for playlist header - 64px
                 setPngIcon(playlistPlayButton, "/icons/play-button.png", 64);
             }
-
-            // Create Playlist Button (Still using SVG or finding PNG if available? User
-            // asked for symbols replacement)
-            // Available PNGs: next-button, previous, volume-up, back, repeat, pause, mute,
-            // next, play-button
-            // No "add" PNG found in list. Falling back to text or keeping SVG for ADD only
-            // if acceptable?
-            // Task says "use the png symbols...". I will try to use a relevant one or keep
-            // text if none fits.
-            // For now, I'll keep the SVG for add/create since no PNG match, OR revert to
-            // text "+"
-            // But let's check if I can use a generic one. I'll stick to SVG for 'add' as it
-            // wasn't explicitly provided as PNG.
-            // Actually user said "use the png symbols as replacement".
-            // I will use what I have.
 
             if (volumeLabel != null) {
                 // Use ImageView for label graphic
@@ -454,13 +434,6 @@ public class MainController {
             // Update existing playlist
             playlistService.updatePlaylist(updatedPlaylist);
 
-            // Actually, the plan said "Update Method: Add updatePlaylistMetadata(Playlist
-            // p)".
-            // I missed adding that explicitly to Service in previous step, so I will do a
-            // quick DB save here
-            // or call savePlaylist (which is INSERT OR REPLACE).
-
-            // Update UI details
             playlistTitleLabel.setText(updatedPlaylist.getName());
             playlistDescriptionLabel.setText(updatedPlaylist.getDescription());
             if (updatedPlaylist.getAuthor() != null)
