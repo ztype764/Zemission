@@ -112,8 +112,6 @@ public class PlaylistService {
             if (playlist == null)
                 return;
 
-            // Re-construct staging path (this logic is duplicated, should be centralized
-            // but OK for now)
             Path playlistDir = torrentService.getStagingRoot()
                     .resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
             File metadataFile = playlistDir.resolve("metadata.json").toFile();
@@ -122,33 +120,24 @@ public class PlaylistService {
                 com.google.gson.Gson gson = new com.google.gson.Gson();
                 Playlist meta = gson.fromJson(new java.io.FileReader(metadataFile), Playlist.class);
 
-                // Update fields if they exist in valid metadata
                 boolean changed = false;
-                if (meta.getCoverImagePath() != null) {
-                    // Note: Cover Image Path in metadata.json is likely absolute from the Creator's
-                    // machine, which is WRONG for the Leecher.
-                    // The Creator should have stored a RELATIVE path or the image itself in the
-                    // torrent.
-                    // For this prototype, we will assume the image is INSIDE the torrent folder.
-                    // If the coverImagePath is just a filename "cover.jpg", we resolve it to the
-                    // staging dir.
 
-                    String coverName = new File(meta.getCoverImagePath()).getName();
-                    File localCover = playlistDir.resolve(coverName).toFile();
-                    if (localCover.exists()) {
-                        playlist.setCoverImagePath(localCover.getAbsolutePath());
+                // Handle missing tracks (Imported case)
+                if (playlist.getTracks() == null || playlist.getTracks().isEmpty()) {
+                    if (meta.getTracks() != null) {
+                        List<Track> newTracks = new ArrayList<>();
+                        for (Track t : meta.getTracks()) {
+                            // Fix path: point to local staging file
+                            String safeName = new File(t.getFilePath()).getName();
+                            File localFile = playlistDir.resolve(safeName).toFile();
+                            t.setFilePath(localFile.getAbsolutePath());
+                            newTracks.add(t);
+                        }
+                        playlist.setTracks(newTracks);
                         changed = true;
                     }
-                }
-
-                if (meta.getAuthor() != null) {
-                    playlist.setAuthor(meta.getAuthor());
-                    changed = true;
-                }
-
-                // Update rich track metadata (Artist/Album) if names match
-                // This is a naive merge
-                if (meta.getTracks() != null && playlist.getTracks() != null) {
+                } else if (meta.getTracks() != null) {
+                    // Existing tracks: Merge metadata
                     for (Track localTrack : playlist.getTracks()) {
                         for (Track remoteTrack : meta.getTracks()) {
                             if (localTrack.getTitle().equals(remoteTrack.getTitle())) {
@@ -158,6 +147,20 @@ public class PlaylistService {
                             }
                         }
                     }
+                }
+
+                if (meta.getCoverImagePath() != null) {
+                    String coverName = new File(meta.getCoverImagePath()).getName();
+                    File localCover = playlistDir.resolve(coverName).toFile();
+                    if (localCover.exists()) {
+                        playlist.setCoverImagePath(localCover.getAbsolutePath());
+                        changed = true;
+                    }
+                }
+
+                if (meta.getAuthor() != null && playlist.getAuthor() == null) {
+                    playlist.setAuthor(meta.getAuthor());
+                    changed = true;
                 }
 
                 if (changed) {
@@ -179,15 +182,25 @@ public class PlaylistService {
     }
 
     public void play(Playlist playlist) {
-        // This is where streaming logic connects
-        // For local playlists (owned), we just play files directly?
-        // Or do we simulate streaming?
-        // User asked: "stream their audio files, when we stream their audio we can seed
-        // it"
-        // So for the owner, we play local files AND seed.
-        // For others, they download AND play.
+        boolean isLocal = false;
+        // Logic: Checks tracks exist
+        if (playlist.getTracks() != null && !playlist.getTracks().isEmpty()) {
+            String path = playlist.getTracks().get(0).getFilePath();
+            if (path != null && new File(path).exists()) {
+                isLocal = true;
+            }
+        }
 
-        // MVP: Just play local files for owner.
+        logger.info("Playing playlist {}: Mode={}", playlist.getName(),
+                isLocal ? "Local/Seeding" : "Streaming/Downloading");
+
+        if (isLocal) {
+            // Owner or fully downloaded: Seed normally
+            torrentService.startSeeding(playlist);
+        } else {
+            // Imported/Incomplete: Stream (Sequential download)
+            torrentService.startStreaming(playlist);
+        }
     }
 
     public void restartSeeding(String playlistId) {

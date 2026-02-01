@@ -112,10 +112,46 @@ class PlaylistServiceTest {
             startSeedingCalled = true;
         }
 
+        boolean startStreamingCalled = false;
+
+        @Override
+        public void startStreaming(Playlist playlist) {
+            startStreamingCalled = true;
+        }
+
         @Override
         public void stop(String playlistId) {
             stopCalled = true;
             lastStoppedId = playlistId;
         }
+    }
+
+    @Test
+    void testPlay_Local() throws IOException {
+        Playlist playlist = new Playlist("Local", "Desc");
+        File tempFile = File.createTempFile("test", ".mp3");
+        tempFile.deleteOnExit();
+
+        com.ztype.zemmision.models.Track track = new com.ztype.zemmision.models.Track();
+        track.setFilePath(tempFile.getAbsolutePath());
+        playlist.setTracks(Collections.singletonList(track));
+
+        playlistService.play(playlist);
+
+        assertTrue(torrentService.startSeedingCalled);
+        assertFalse(torrentService.startStreamingCalled);
+    }
+
+    @Test
+    void testPlay_Imported() {
+        Playlist playlist = new Playlist("Imported", "Desc");
+        com.ztype.zemmision.models.Track track = new com.ztype.zemmision.models.Track();
+        track.setFilePath("/path/to/non/existent/file.mp3");
+        playlist.setTracks(Collections.singletonList(track));
+
+        playlistService.play(playlist);
+
+        assertFalse(torrentService.startSeedingCalled);
+        assertTrue(torrentService.startStreamingCalled);
     }
 }

@@ -11,6 +11,9 @@ import bt.runtime.BtClient;
 import bt.torrent.TorrentSessionState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import bt.torrent.selector.SequentialSelector;
+import bt.torrent.selector.RarestFirstSelector;
+import bt.torrent.selector.PieceSelector;
 
 import java.io.File;
 import java.io.IOException;
@@ -110,50 +113,65 @@ public class TorrentService {
     }
 
     public void startSeeding(Playlist playlist) {
+        startTorrent(playlist, false);
+    }
+
+    public void startStreaming(Playlist playlist) {
+        startTorrent(playlist, true);
+    }
+
+    private void startTorrent(Playlist playlist, boolean sequential) {
         if (activeClients.containsKey(playlist.getId())) {
+            // IF switching from random to sequential, we might want to restart?
+            // For MVP, just return if already active.
             logger.info("Playlist {} is already active.", playlist.getName());
             return;
         }
 
-        logger.info("Starting to seed playlist: {}", playlist.getName());
+        logger.info("Starting to {} playlist: {}", sequential ? "stream" : "seed", playlist.getName());
         Path torrentFile = Paths.get(playlist.getTorrentFilePath());
         Path dataDir = stagingRoot.resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
 
-        Storage storage = new FileSystemStorage(dataDir.getParent()); // Storage root is parent, torrent name is subdir
+        Storage storage = new FileSystemStorage(dataDir.getParent());
 
-        // Use standard DHT module
         DHTModule dhtModule = new DHTModule(new DHTConfig() {
             @Override
             public boolean shouldUseRouterBootstrap() {
                 return true;
             }
-
         });
 
         try {
-            BtClient client = buildClient(storage, dhtModule, torrentFile);
+            BtClient client = buildClient(storage, dhtModule, torrentFile,
+                    sequential ? SequentialSelector.sequential() : RarestFirstSelector.randomizedRarest());
 
             activeClients.put(playlist.getId(), client);
 
             CompletableFuture.runAsync(() -> {
-                logger.info("Seeding started for: {}", playlist.getName());
+                logger.info("Client started for: {}", playlist.getName());
                 client.startAsync(state -> {
                     clientStates.put(playlist.getId(), state);
                 }, 1000).join();
             });
         } catch (java.net.MalformedURLException e) {
-            logger.error("Failed to start seeding", e);
+            logger.error("Failed to start client", e);
             e.printStackTrace();
         }
     }
 
     protected BtClient buildClient(Storage storage, DHTModule dhtModule, Path torrentFile)
             throws java.net.MalformedURLException {
+        return buildClient(storage, dhtModule, torrentFile, RarestFirstSelector.randomizedRarest());
+    }
+
+    protected BtClient buildClient(Storage storage, DHTModule dhtModule, Path torrentFile, PieceSelector selector)
+            throws java.net.MalformedURLException {
         return Bt.client()
                 .torrent(torrentFile.toUri().toURL())
                 .storage(storage)
                 .autoLoadModules()
                 .module(dhtModule)
+                .selector(selector)
                 .afterTorrentFetched(t -> {
                     logger.info("Torrent metadata fetched: {}", t.getName());
                 })
