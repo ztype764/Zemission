@@ -154,4 +154,27 @@ class PlaylistServiceTest {
         assertFalse(torrentService.startSeedingCalled);
         assertTrue(torrentService.startStreamingCalled);
     }
+
+    @Test
+    void testPlaylistPersistence() {
+        // This test simulates the edit flow being reported as broken
+        Playlist playlist = new Playlist("Persistence Test", "Original Desc");
+        playlist.setId("test-persistence-1");
+        com.ztype.zemmision.models.Track track = new com.ztype.zemmision.models.Track();
+        track.setTitle("Original Title");
+        track.setArtist("Original Artist");
+        playlist.setTracks(Collections.singletonList(track));
+
+        // 1. Initial Save
+        playlistService.updatePlaylist(playlist);
+        assertTrue(databaseService.savePlaylistCalled);
+        assertEquals("Original Artist", databaseService.lastSavedPlaylist.getTracks().get(0).getArtist());
+
+        // 2. Simulate User Edit (Update object reference)
+        playlist.getTracks().get(0).setArtist("New Artist");
+        playlistService.updatePlaylist(playlist);
+
+        // 3. Verify Save called again with new data
+        assertEquals("New Artist", databaseService.lastSavedPlaylist.getTracks().get(0).getArtist());
+    }
 }

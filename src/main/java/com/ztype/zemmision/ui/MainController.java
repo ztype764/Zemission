@@ -11,7 +11,7 @@ import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
-import javafx.scene.control.cell.TextFieldTableCell;
+
 import javafx.scene.layout.VBox;
 import javafx.scene.media.Media;
 import javafx.scene.media.MediaPlayer;
@@ -288,7 +288,7 @@ public class MainController {
         trackNumberColumn.setCellValueFactory(cellData -> new SimpleStringProperty(
                 String.valueOf(tracksTableView.getItems().indexOf(cellData.getValue()) + 1)));
         trackTitleColumn.setCellValueFactory(cellData -> new SimpleStringProperty(cellData.getValue().getTitle()));
-        trackTitleColumn.setCellFactory(TextFieldTableCell.forTableColumn());
+        trackTitleColumn.setCellFactory(EditingCell.forTableColumn());
         trackTitleColumn.setOnEditCommit(event -> {
             Track track = event.getRowValue();
             track.setTitle(event.getNewValue());
@@ -299,7 +299,7 @@ public class MainController {
         });
 
         trackArtistColumn.setCellValueFactory(cellData -> new SimpleStringProperty(cellData.getValue().getArtist()));
-        trackArtistColumn.setCellFactory(TextFieldTableCell.forTableColumn());
+        trackArtistColumn.setCellFactory(EditingCell.forTableColumn());
         trackArtistColumn.setOnEditCommit(event -> {
             Track track = event.getRowValue();
             track.setArtist(event.getNewValue());
@@ -309,7 +309,7 @@ public class MainController {
         });
 
         trackAlbumColumn.setCellValueFactory(cellData -> new SimpleStringProperty(cellData.getValue().getAlbum()));
-        trackAlbumColumn.setCellFactory(TextFieldTableCell.forTableColumn());
+        trackAlbumColumn.setCellFactory(EditingCell.forTableColumn());
         trackAlbumColumn.setOnEditCommit(event -> {
             Track track = event.getRowValue();
             track.setAlbum(event.getNewValue());
