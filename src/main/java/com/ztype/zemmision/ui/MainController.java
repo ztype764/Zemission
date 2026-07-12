@@ -538,6 +538,8 @@ public class MainController {
         if (pOpt.isPresent()) {
             currentPlaylist = pOpt.get();
             currentTrackIndex = currentPlaylist.getTracks().indexOf(track);
+            // Ensure sequential download / streaming starts
+            playlistService.play(currentPlaylist);
             // Update last played
             playlistService.updateLastPlayed(currentPlaylist.getId());
         } else if (currentPlaylist == null) {
@@ -548,7 +550,7 @@ public class MainController {
         try {
             File mediaFile = new File(track.getFilePath());
             if (!mediaFile.exists()) {
-                showAlert("Error", "File not found: " + track.getFilePath());
+                showAlert("Buffering", "Streaming has started for this playlist.\nPlease wait a moment for the track to buffer and double-click to play again.");
                 return;
             }
 
@@ -819,8 +821,12 @@ public class MainController {
     }
 
     private void refreshPlaylistList() {
+        String selectedName = playlistListView.getSelectionModel().getSelectedItem();
         playlistListView.getItems().clear();
         playlistService.getAllPlaylists().forEach(p -> playlistListView.getItems().add(p.getName()));
+        if (selectedName != null && playlistListView.getItems().contains(selectedName)) {
+            playlistListView.getSelectionModel().select(selectedName);
+        }
     }
 
     private void startStatusPoller() {
@@ -832,8 +838,27 @@ public class MainController {
 
     private void updateStatusTable() {
         ObservableList<StatusModel> data = FXCollections.observableArrayList();
+        boolean playlistListChanged = false;
         for (Playlist p : playlistService.getAllPlaylists()) {
             TorrentService.ClientStatus status = playlistService.getTransferStatus(p.getId());
+
+            // Check if metadata needs to be refreshed (for imported playlists)
+            if (p.getTracks() == null || p.getTracks().isEmpty()) {
+                playlistService.refreshMetadata(p.getId());
+                // Reload playlist from DB to see if it now has tracks
+                Playlist updated = playlistService.getAllPlaylists().stream()
+                        .filter(pl -> pl.getId().equals(p.getId()))
+                        .findFirst()
+                        .orElse(p);
+                if (updated.getTracks() != null && !updated.getTracks().isEmpty()) {
+                    playlistListChanged = true;
+                    // If this is the current playlist in view, refresh the view reference
+                    if (currentPlaylist != null && currentPlaylist.getId().equals(p.getId())) {
+                        currentPlaylist = updated;
+                    }
+                }
+            }
+
             data.add(new StatusModel(
                     p.getName(),
                     status.getState(),
@@ -842,6 +867,13 @@ public class MainController {
                     String.format("%.2f KB/s", status.getDownloadSpeed() / 1024.0)));
         }
         statusTable.setItems(data);
+
+        if (playlistListChanged) {
+            refreshPlaylistList();
+            if (currentPlaylist != null) {
+                showPlaylist(currentPlaylist.getName());
+            }
+        }
     }
 
     private void showAlert(String title, String content) {

@@ -83,20 +83,40 @@ public class PlaylistService {
     public Playlist importPlaylist(File torrentFile) throws IOException {
         logger.info("Importing playlist from torrent: {}", torrentFile.getName());
         String name = torrentFile.getName().replace(".torrent", "");
+        String playlistId = null;
+
+        try {
+            com.turn.ttorrent.common.Torrent torrent = com.turn.ttorrent.common.Torrent.load(torrentFile);
+            String torrentName = torrent.getName();
+            if (torrentName != null) {
+                int lastUnderscore = torrentName.lastIndexOf('_');
+                if (lastUnderscore != -1 && lastUnderscore < torrentName.length() - 1) {
+                    String potentialUuid = torrentName.substring(lastUnderscore + 1);
+                    if (potentialUuid.length() == 36) { // standard UUID length
+                        playlistId = potentialUuid;
+                        name = torrentName.substring(0, lastUnderscore).replace('_', ' ');
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to load torrent metadata from: {}", torrentFile.getName(), e);
+        }
 
         Playlist playlist = new Playlist(name, "Imported from " + torrentFile.getName());
+        if (playlistId != null) {
+            playlist.setId(playlistId);
+        }
         playlist.setTracks(new ArrayList<>());
         playlist.setTorrentFilePath(torrentFile.getAbsolutePath());
 
         // Save initial state
         databaseService.savePlaylist(playlist);
 
+        // Try to refresh metadata immediately if files already exist
+        refreshMetadata(playlist.getId());
+
         // Start downloading/seeding
         torrentService.startSeeding(playlist);
-
-        // Note: Metadata will be loaded once download completes and we find
-        // metadata.json
-        // Or we can try to inspect if it's already there (if re-importing).
 
         return playlist;
     }

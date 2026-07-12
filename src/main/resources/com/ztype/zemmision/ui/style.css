@@ -1,8 +1,10 @@
 /* Base Application Style */
 .root {
   -fx-font-family: "Segoe UI", Helvetica, Arial, sans-serif;
-  -fx-background-color: #f5f5f5; /* Light background */
-  -fx-text-fill: #333333; /* Dark text */
+  -fx-background-color: #f5f5f5;
+  /* Light background */
+  -fx-text-fill: #333333;
+  /* Dark text */
 }
 
 /* Sidebar */
@@ -10,13 +12,13 @@
   -fx-background-color: #d0d0d0;
   -fx-padding: 10;
   -fx-spacing: 10;
-  -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.1), 10, 0, 0, 0);
+  -fx-effect: dropshadow(three-pass-box, rgba(0, 0, 0, 0.1), 10, 0, 0, 0);
 }
 
 .sidebar-label {
   -fx-text-fill: #666666;
   -fx-font-weight: bold;
-  -fx-font-size: 12px;
+  -fx-font-size: 20px;
   -fx-padding: 10 0 5 0;
 }
 
@@ -41,7 +43,7 @@
 
 .header-label {
   -fx-text-fill: #333333;
-  -fx-font-size: 24px;
+  -fx-font-size: 30px;
   -fx-font-weight: bold;
 }
 
@@ -106,7 +108,7 @@
 .control-button {
   -fx-background-color: transparent;
   -fx-text-fill: #333333;
-  -fx-font-size: 14px;
+  -fx-font-size: 20px;
   -fx-cursor: hand;
   -fx-border-color: #cccccc;
   -fx-border-radius: 4;
@@ -121,7 +123,7 @@
   -fx-background-color: transparent;
   -fx-padding: 0;
   -fx-cursor: hand;
-  -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.2), 5, 0, 0, 2);
+  -fx-effect: dropshadow(three-pass-box, rgba(0, 0, 0, 0.2), 5, 0, 0, 2);
 }
 
 /* List Views (Sidebar Playlists) */

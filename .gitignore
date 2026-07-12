@@ -2,3 +2,5 @@ target
 *.class
 data
 temp-staging
+.db
+torrentstreamer.db

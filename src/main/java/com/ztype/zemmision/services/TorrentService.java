@@ -32,12 +32,18 @@ public class TorrentService {
     private final Path torrentsDir;
     private final Map<String, BtClient> activeClients;
     private final java.util.Map<String, TorrentSessionState> clientStates;
+    private final java.util.Set<Integer> allocatedPorts;
+    private final java.util.Map<String, java.util.List<Integer>> playlistPorts;
+    private final java.util.Map<String, Integer> playlistAcceptorPorts;
 
     public TorrentService() {
         this.stagingRoot = Paths.get("data", "staging");
         this.torrentsDir = Paths.get("data", "torrents");
         this.activeClients = new HashMap<>();
         this.clientStates = new java.util.concurrent.ConcurrentHashMap<>();
+        this.allocatedPorts = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        this.playlistPorts = new java.util.concurrent.ConcurrentHashMap<>();
+        this.playlistAcceptorPorts = new java.util.concurrent.ConcurrentHashMap<>();
         try {
             Files.createDirectories(stagingRoot);
             Files.createDirectories(torrentsDir);
@@ -134,12 +140,23 @@ public class TorrentService {
 
         Storage storage = new FileSystemStorage(dataDir.getParent());
 
+        java.util.List<Integer> ports = new java.util.ArrayList<>();
+        int dhtPort = findFreePort(49001, ports);
         DHTModule dhtModule = new DHTModule(new DHTConfig() {
             @Override
             public boolean shouldUseRouterBootstrap() {
                 return true;
             }
+
+            @Override
+            public int getListeningPort() {
+                return dhtPort;
+            }
         });
+
+        int acceptorPort = findFreePort(6891, ports);
+        playlistPorts.put(playlist.getId(), ports);
+        playlistAcceptorPorts.put(playlist.getId(), acceptorPort);
 
         try {
             BtClient client = buildClient(storage, dhtModule, torrentFile,
@@ -166,7 +183,21 @@ public class TorrentService {
 
     protected BtClient buildClient(Storage storage, DHTModule dhtModule, Path torrentFile, PieceSelector selector)
             throws java.net.MalformedURLException {
+        String filename = torrentFile.getFileName().toString();
+        String playlistId = filename.endsWith(".torrent") ? filename.substring(0, filename.length() - 8) : filename;
+
+        int freePort = playlistAcceptorPorts.getOrDefault(playlistId, 6891);
+        logger.info("Selected free acceptor port: {} for torrent client", freePort);
+
+        bt.runtime.Config config = new bt.runtime.Config() {
+            @Override
+            public int getAcceptorPort() {
+                return freePort;
+            }
+        };
+
         return Bt.client()
+                .config(config)
                 .torrent(torrentFile.toUri().toURL())
                 .storage(storage)
                 .autoLoadModules()
@@ -183,6 +214,12 @@ public class TorrentService {
         clientStates.remove(playlistId);
         if (client != null) {
             client.stop();
+        }
+        playlistAcceptorPorts.remove(playlistId);
+        java.util.List<Integer> ports = playlistPorts.remove(playlistId);
+        if (ports != null) {
+            allocatedPorts.removeAll(ports);
+            logger.info("Released ports {} for playlist ID: {}", ports, playlistId);
         }
     }
 
@@ -242,5 +279,28 @@ public class TorrentService {
     private String getExtension(String path) {
         int i = path.lastIndexOf('.');
         return (i > 0) ? path.substring(i) : "";
+    }
+
+    private int findFreePort(int startPort) {
+        return findFreePort(startPort, null);
+    }
+
+    private int findFreePort(int startPort, java.util.List<Integer> reservedList) {
+        int port = startPort;
+        while (port < 65535) {
+            if (!allocatedPorts.contains(port)) {
+                try (java.net.ServerSocket socket = new java.net.ServerSocket(port)) {
+                    allocatedPorts.add(port);
+                    if (reservedList != null) {
+                        reservedList.add(port);
+                    }
+                    return port;
+                } catch (IOException e) {
+                    // Port is in use
+                }
+            }
+            port++;
+        }
+        return startPort;
     }
 }

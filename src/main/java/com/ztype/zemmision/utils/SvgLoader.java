@@ -3,7 +3,6 @@ package com.ztype.zemmision.utils;
 import javafx.scene.Group;
 import javafx.scene.Node;
 import javafx.scene.paint.Color;
-import javafx.scene.paint.Paint;
 import javafx.scene.shape.SVGPath;
 import javafx.scene.shape.Shape;
 import org.w3c.dom.Document;
