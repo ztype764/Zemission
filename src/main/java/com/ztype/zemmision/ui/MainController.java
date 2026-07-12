@@ -514,14 +514,22 @@ public class MainController {
         boolean isThisPlaylistPlaying = (playingPlaylist != null
                 && playingPlaylist.getId().equals(currentPlaylist.getId()));
 
+        TorrentService.ClientStatus status = playlistService.getTransferStatus(currentPlaylist.getId());
+        String peerInfo = "";
+        if (status != null && !"Stopped".equals(status.getState())) {
+            int peerCount = status.getPeers();
+            peerInfo = String.format(" | %s (%d active subscriber%s)", 
+                status.getState(), peerCount, peerCount == 1 ? "" : "s");
+        }
+
         if (isThisPlaylistPlaying && isPlaying) {
-            playlistStatusLabel.setText("Currently Playing");
+            playlistStatusLabel.setText("Currently Playing" + peerInfo);
             setPngIcon(playlistPlayButton, "/icons/pause.png", 64);
         } else if (isThisPlaylistPlaying && !isPlaying) {
-            playlistStatusLabel.setText("Paused");
+            playlistStatusLabel.setText("Paused" + peerInfo);
             setPngIcon(playlistPlayButton, "/icons/play-button.png", 64);
         } else {
-            playlistStatusLabel.setText("");
+            playlistStatusLabel.setText(peerInfo.isEmpty() ? "" : peerInfo.substring(3));
             setPngIcon(playlistPlayButton, "/icons/play-button.png", 64);
         }
 
@@ -875,6 +883,7 @@ public class MainController {
 
         if (playlistView.isVisible()) {
             tracksTableView.refresh();
+            updatePlaylistHeaderState();
         }
     }
 

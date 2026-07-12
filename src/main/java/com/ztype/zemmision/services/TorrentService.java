@@ -38,6 +38,10 @@ public class TorrentService {
     private final java.util.Set<Integer> allocatedPorts;
     private final java.util.Map<String, java.util.List<Integer>> playlistPorts;
     private final java.util.Map<String, Integer> playlistAcceptorPorts;
+    private final java.util.Map<String, Playlist> activePlaylists;
+    private final java.util.Map<String, Boolean> activeModes;
+    private final java.util.Map<String, Long> frozenStartTime;
+    private final java.util.concurrent.ScheduledExecutorService monitorService;
 
     public TorrentService() {
         this.stagingRoot = Paths.get("data", "staging");
@@ -47,6 +51,15 @@ public class TorrentService {
         this.allocatedPorts = java.util.concurrent.ConcurrentHashMap.newKeySet();
         this.playlistPorts = new java.util.concurrent.ConcurrentHashMap<>();
         this.playlistAcceptorPorts = new java.util.concurrent.ConcurrentHashMap<>();
+        this.activePlaylists = new java.util.concurrent.ConcurrentHashMap<>();
+        this.activeModes = new java.util.concurrent.ConcurrentHashMap<>();
+        this.frozenStartTime = new java.util.concurrent.ConcurrentHashMap<>();
+        this.monitorService = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "torrent-monitor");
+            t.setDaemon(true);
+            return t;
+        });
+        this.monitorService.scheduleAtFixedRate(this::checkFrozenTorrents, 5, 5, java.util.concurrent.TimeUnit.SECONDS);
         try {
             Files.createDirectories(stagingRoot);
             Files.createDirectories(torrentsDir);
@@ -137,6 +150,9 @@ public class TorrentService {
             return;
         }
 
+        activePlaylists.put(playlist.getId(), playlist);
+        activeModes.put(playlist.getId(), sequential);
+
         logger.info("Starting to {} playlist: {}", sequential ? "stream" : "seed", playlist.getName());
         Path torrentFile = Paths.get(playlist.getTorrentFilePath());
         Path dataDir = stagingRoot.resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
@@ -171,6 +187,15 @@ public class TorrentService {
                 logger.info("Client started for: {}", playlist.getName());
                 client.startAsync(state -> {
                     clientStates.put(playlist.getId(), state);
+                    java.util.Set<bt.net.ConnectionKey> peers = state.getConnectedPeers();
+                    if (peers != null && !peers.isEmpty()) {
+                        double pct = (state.getPiecesTotal() > 0) ? ((double) state.getPiecesComplete() / state.getPiecesTotal() * 100.0) : 0.0;
+                        logger.info("Playlist '{}' ({}) - Active Subscribers/Downloaders: {} peers connected. Uploaded: {} bytes, Downloaded: {} bytes, Progress: %.1f%%", 
+                                    playlist.getName(), playlist.getId(), peers.size(), state.getUploaded(), state.getDownloaded(), pct);
+                        for (bt.net.ConnectionKey peerKey : peers) {
+                            logger.info("  -> Subscriber: {} (port {})", peerKey.getPeer().getInetAddress(), peerKey.getRemotePort());
+                        }
+                    }
                 }, 1000).join();
             });
         } catch (java.net.MalformedURLException e) {
@@ -215,6 +240,9 @@ public class TorrentService {
     public void stop(String playlistId) {
         BtClient client = activeClients.remove(playlistId);
         clientStates.remove(playlistId);
+        activePlaylists.remove(playlistId);
+        activeModes.remove(playlistId);
+        frozenStartTime.remove(playlistId);
         if (client != null) {
             client.stop();
         }
@@ -241,10 +269,7 @@ public class TorrentService {
         int complete = state.getPiecesComplete();
         double progress = (total > 0) ? (double) complete / total : 0.0;
 
-        // Peer count is not directly available in standard TorrentSessionState in all
-        // versions without casting.
-        // We will assume 0 or implement a separate peer listener later if needed.
-        int peers = 0;
+        int peers = state.getConnectedPeers().size();
 
         return new ClientStatus(progress, peers, 0, (complete == total && total > 0) ? "Seeding" : "Downloading");
     }
@@ -388,5 +413,42 @@ public class TorrentService {
             logger.error("Failed to extract TorrentContext using reflection", e);
         }
         return null;
+    }
+
+    private void checkFrozenTorrents() {
+        for (String playlistId : activeClients.keySet()) {
+            ClientStatus status = getClientStatus(playlistId);
+            if (status == null) continue;
+
+            if ("Downloading".equals(status.getState()) && status.getProgress() < 1.0 && status.getPeers() == 0) {
+                long now = System.currentTimeMillis();
+                frozenStartTime.putIfAbsent(playlistId, now);
+                long durationSec = (now - frozenStartTime.get(playlistId)) / 1000;
+
+                logger.warn("Playlist ID: {} download is frozen (0 seeders). Frozen duration: {} seconds.", playlistId, durationSec);
+
+                if (durationSec >= 15) {
+                    logger.info("Restarting frozen torrent for playlist ID: {} to re-bootstrap peer/seeder discovery.", playlistId);
+                    frozenStartTime.remove(playlistId);
+                    restartTorrent(playlistId);
+                }
+            } else {
+                frozenStartTime.remove(playlistId);
+            }
+        }
+    }
+
+    private void restartTorrent(String playlistId) {
+        Playlist playlist = activePlaylists.get(playlistId);
+        Boolean sequential = activeModes.get(playlistId);
+        if (playlist != null && sequential != null) {
+            CompletableFuture.runAsync(() -> {
+                stop(playlistId);
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {}
+                startTorrent(playlist, sequential);
+            });
+        }
     }
 }
