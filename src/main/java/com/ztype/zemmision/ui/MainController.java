@@ -570,7 +570,12 @@ public class MainController {
                 return;
             }
 
-            mediaPlayer = new StandaloneMediaPlayer(mediaFile);
+            String playlistId = currentPlaylist.getId();
+            java.util.function.Supplier<Boolean> completeSupplier = () -> {
+                TorrentService.ClientStatus status = playlistService.getTransferStatus(playlistId);
+                return status == null || "Seeding".equals(status.getState()) || status.getProgress() >= 1.0;
+            };
+            mediaPlayer = new StandaloneMediaPlayer(mediaFile, completeSupplier);
 
             mediaPlayer.currentTimeProperty().addListener((obs, old, time) -> {
                 if (!isSeeking) {

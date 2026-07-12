@@ -53,18 +53,39 @@ public class PlaylistService {
                 java.nio.file.Files.createDirectories(playlistDir);
             }
 
-            // Create metadata object (simplified representation for JSON)
+            // 1. Copy/link original files to staging directory first!
+            for (Track track : playlist.getTracks()) {
+                Path source = java.nio.file.Paths.get(track.getFilePath());
+                String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_") + getExtension(source.toString());
+                Path target = playlistDir.resolve(safeFileName);
+                if (!java.nio.file.Files.exists(target)) {
+                    try {
+                        java.nio.file.Files.createLink(target, source);
+                    } catch (Exception e) {
+                        try {
+                            java.nio.file.Files.copy(source, target);
+                        } catch (IOException copyEx) {
+                            logger.error("Failed to copy file: " + source, copyEx);
+                        }
+                    }
+                }
+            }
+
+            // 2. Update the track paths in the playlist object to point to the staging files
+            for (Track track : playlist.getTracks()) {
+                Path source = java.nio.file.Paths.get(track.getFilePath());
+                String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_") + getExtension(source.toString());
+                Path target = playlistDir.resolve(safeFileName);
+                track.setFilePath(target.toAbsolutePath().toString());
+            }
+
+            // 3. Create metadata.json with the updated staging paths
             File metadataFile = playlistDir.resolve("metadata.json").toFile();
             com.google.gson.Gson gson = new com.google.gson.Gson();
-            // We use the playlist object itself as the metadata source
-            // Note: File paths in metadata.json should be relative to the torrent root, not
-            // absolute system paths
-            // But for simplicity in this step, we just dump what we have.
-            // Correct approach: Clone playlist, strip absolute paths, save.
-
             String json = gson.toJson(playlist);
             java.nio.file.Files.write(metadataFile.toPath(), json.getBytes());
 
+            // 4. Create the .torrent file
             Path torrentPath = torrentService.createPlaylistTorrent(playlist);
             playlist.setTorrentFilePath(torrentPath.toString());
 
@@ -312,14 +333,53 @@ public class PlaylistService {
 
     public void deletePlaylist(String playlistId) {
         logger.info("Deleting playlist {}", playlistId);
+        
+        Playlist playlist = databaseService.getAllPlaylists().stream()
+                .filter(p -> p.getId().equals(playlistId))
+                .findFirst()
+                .orElse(null);
+
         // Stop seeding
         torrentService.stop(playlistId);
         // Remove from DB
         databaseService.deletePlaylist(playlistId);
+
+        if (playlist != null) {
+            boolean isImported = playlist.getDescription() != null && playlist.getDescription().startsWith("Imported from");
+            if (isImported) {
+                Path playlistDir = torrentService.getStagingRoot()
+                        .resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
+                deleteDirectory(playlistDir.toFile());
+                logger.info("Deleted staging directory for imported playlist: {}", playlistDir);
+
+                if (playlist.getTorrentFilePath() != null) {
+                    File torrentFile = new File(playlist.getTorrentFilePath());
+                    if (torrentFile.exists()) {
+                        torrentFile.delete();
+                        logger.info("Deleted torrent file: {}", torrentFile);
+                    }
+                }
+            }
+        }
+    }
+
+    private void deleteDirectory(File file) {
+        File[] contents = file.listFiles();
+        if (contents != null) {
+            for (File f : contents) {
+                deleteDirectory(f);
+            }
+        }
+        file.delete();
     }
 
     public double getTrackProgress(String playlistId, Track track) {
         String safeName = new File(track.getFilePath()).getName();
         return torrentService.getTrackProgress(playlistId, safeName);
+    }
+
+    private String getExtension(String path) {
+        int i = path.lastIndexOf('.');
+        return (i > 0) ? path.substring(i) : "";
     }
 }

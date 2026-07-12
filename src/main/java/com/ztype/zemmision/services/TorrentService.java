@@ -436,21 +436,37 @@ public class TorrentService {
     private bt.processor.torrent.TorrentContext getTorrentContext(BtClient client) {
         try {
             bt.runtime.BtClient delegate = client;
-            if (delegate.getClass().getName().equals("bt.LazyClient")) {
-                java.lang.reflect.Field delegateField = delegate.getClass().getDeclaredField("delegate");
-                delegateField.setAccessible(true);
-                delegate = (bt.runtime.BtClient) delegateField.get(delegate);
+            if (delegate.getClass().getName().contains("LazyClient")) {
+                java.lang.reflect.Field delegateField = getField(delegate.getClass(), "delegate");
+                if (delegateField != null) {
+                    delegateField.setAccessible(true);
+                    delegate = (bt.runtime.BtClient) delegateField.get(delegate);
+                }
             }
-            if (delegate != null && delegate.getClass().getName().equals("bt.DefaultClient")) {
-                java.lang.reflect.Field contextField = delegate.getClass().getDeclaredField("context");
-                contextField.setAccessible(true);
-                Object context = contextField.get(delegate);
-                if (context instanceof bt.processor.torrent.TorrentContext) {
-                    return (bt.processor.torrent.TorrentContext) context;
+            if (delegate != null) {
+                java.lang.reflect.Field contextField = getField(delegate.getClass(), "context");
+                if (contextField != null) {
+                    contextField.setAccessible(true);
+                    Object context = contextField.get(delegate);
+                    if (context instanceof bt.processor.torrent.TorrentContext) {
+                        return (bt.processor.torrent.TorrentContext) context;
+                    }
                 }
             }
         } catch (Exception e) {
-            logger.error("Failed to extract TorrentContext using reflection", e);
+            logger.error("Failed to extract TorrentContext using reflection: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    private java.lang.reflect.Field getField(Class<?> clazz, String fieldName) {
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                return current.getDeclaredField(fieldName);
+            } catch (NoSuchFieldException e) {
+                current = current.getSuperclass();
+            }
         }
         return null;
     }

@@ -75,17 +75,26 @@ class PlaylistServiceTest {
         boolean deletePlaylistCalled = false;
         Playlist lastSavedPlaylist;
         String lastDeletedId;
+        private final List<Playlist> list = new java.util.ArrayList<>();
 
         @Override
         public void savePlaylist(Playlist playlist) {
             savePlaylistCalled = true;
             lastSavedPlaylist = playlist;
+            list.removeIf(p -> p.getId().equals(playlist.getId()));
+            list.add(playlist);
         }
 
         @Override
         public void deletePlaylist(String id) {
             deletePlaylistCalled = true;
             lastDeletedId = id;
+            list.removeIf(p -> p.getId().equals(id));
+        }
+
+        @Override
+        public List<Playlist> getAllPlaylists() {
+            return list;
         }
     }
 
@@ -175,5 +184,38 @@ class PlaylistServiceTest {
 
         // 3. Verify Save called again with new data
         assertEquals("New Artist", databaseService.lastSavedPlaylist.getTracks().get(0).getArtist());
+    }
+
+    @Test
+    void testDeleteImportedPlaylist() throws IOException {
+        Playlist playlist = new Playlist("ImportedToDelete", "Imported from test.torrent");
+        databaseService.savePlaylist(playlist);
+
+        Path tempStaging = java.nio.file.Files.createTempDirectory("tempDeleteStaging");
+        Path playlistDir = tempStaging.resolve("ImportedToDelete_" + playlist.getId());
+        java.nio.file.Files.createDirectories(playlistDir);
+        Path dummyFile = playlistDir.resolve("dummy.mp3");
+        java.nio.file.Files.write(dummyFile, "dummy audio".getBytes());
+
+        File torrentFile = java.nio.file.Files.createTempFile("test-torrent", ".torrent").toFile();
+        playlist.setTorrentFilePath(torrentFile.getAbsolutePath());
+
+        MockTorrentService mockTorrentService = new MockTorrentService() {
+            @Override
+            public Path getStagingRoot() {
+                return tempStaging;
+            }
+        };
+
+        PlaylistService customService = new PlaylistService(databaseService, mockTorrentService);
+        customService.deletePlaylist(playlist.getId());
+
+        assertFalse(playlistDir.toFile().exists());
+        assertFalse(torrentFile.exists());
+
+        // Cleanup
+        try {
+            java.nio.file.Files.deleteIfExists(tempStaging);
+        } catch (Exception ignored) {}
     }
 }

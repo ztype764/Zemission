@@ -32,8 +32,16 @@ public class StandaloneMediaPlayer {
     private final javafx.beans.property.ObjectProperty<javafx.util.Duration> totalDuration = 
             new javafx.beans.property.SimpleObjectProperty<>(javafx.util.Duration.ZERO);
 
+    private java.util.function.Supplier<Boolean> downloadCompleteSupplier;
+    private double seekSeconds = 0;
+
     public StandaloneMediaPlayer(File file) {
+        this(file, () -> true);
+    }
+
+    public StandaloneMediaPlayer(File file, java.util.function.Supplier<Boolean> downloadCompleteSupplier) {
         this.currentFile = file;
+        this.downloadCompleteSupplier = downloadCompleteSupplier;
         initializeDuration();
     }
 
@@ -110,45 +118,56 @@ public class StandaloneMediaPlayer {
 
         if (isPlaying) return;
 
-        if (currentFile == null || !currentFile.exists()) {
-            logger.error("Cannot play; file not found: " + (currentFile == null ? "null" : currentFile.getPath()));
+        if (currentFile == null) {
+            logger.error("Cannot play; file is null");
             return;
         }
 
         isPlaying = true;
         isPaused = false;
 
-        try {
-            baseStream = AudioSystem.getAudioInputStream(currentFile);
-            AudioFormat baseFormat = baseStream.getFormat();
-            AudioFormat decodedFormat = new AudioFormat(
-                    AudioFormat.Encoding.PCM_SIGNED,
-                    baseFormat.getSampleRate(),
-                    16,
-                    baseFormat.getChannels(),
-                    baseFormat.getChannels() * 2,
-                    baseFormat.getSampleRate(),
-                    false);
-            decodedStream = AudioSystem.getAudioInputStream(decodedFormat, baseStream);
-
-            DataLine.Info info = new DataLine.Info(SourceDataLine.class, decodedFormat);
-            line = (SourceDataLine) AudioSystem.getLine(info);
-            line.open(decodedFormat);
-            line.start();
-            setVolume(volume);
-
-            startPlaybackThread(decodedFormat);
-        } catch (Exception e) {
-            logger.error("Failed to start audio playback for: " + currentFile.getName(), e);
-            isPlaying = false;
-        }
+        startPlaybackThread();
     }
 
-    private void startPlaybackThread(AudioFormat format) {
+    private void startPlaybackThread() {
         playbackThread = new Thread(() -> {
-            byte[] buffer = new byte[4096];
-            int nBytesRead;
             try {
+                baseStream = AudioSystem.getAudioInputStream(
+                    new GrowingFileInputStream(currentFile, downloadCompleteSupplier)
+                );
+                AudioFormat baseFormat = baseStream.getFormat();
+                AudioFormat decodedFormat = new AudioFormat(
+                        AudioFormat.Encoding.PCM_SIGNED,
+                        baseFormat.getSampleRate(),
+                        16,
+                        baseFormat.getChannels(),
+                        baseFormat.getChannels() * 2,
+                        baseFormat.getSampleRate(),
+                        false);
+                decodedStream = AudioSystem.getAudioInputStream(decodedFormat, baseStream);
+
+                DataLine.Info info = new DataLine.Info(SourceDataLine.class, decodedFormat);
+                line = (SourceDataLine) AudioSystem.getLine(info);
+                line.open(decodedFormat);
+                line.start();
+                setVolume(volume);
+
+                if (seekSeconds > 0) {
+                    long byteOffset = (long) (seekSeconds * decodedFormat.getSampleRate() * decodedFormat.getFrameSize());
+                    byteOffset = (byteOffset / decodedFormat.getFrameSize()) * decodedFormat.getFrameSize();
+
+                    long skipped = 0;
+                    while (skipped < byteOffset) {
+                        long skipVal = decodedStream.skip(byteOffset - skipped);
+                        if (skipVal <= 0) break;
+                        skipped += skipVal;
+                    }
+                    currentDecodedBytesRead = skipped;
+                    seekSeconds = 0; // reset
+                }
+
+                byte[] buffer = new byte[4096];
+                int nBytesRead;
                 while (isPlaying) {
                     synchronized (pauseLock) {
                         while (isPaused && isPlaying) {
@@ -170,7 +189,7 @@ public class StandaloneMediaPlayer {
                     line.write(buffer, 0, nBytesRead);
                     currentDecodedBytesRead += nBytesRead;
 
-                    double currentSec = (double) currentDecodedBytesRead / (format.getSampleRate() * format.getFrameSize());
+                    double currentSec = (double) currentDecodedBytesRead / (decodedFormat.getSampleRate() * decodedFormat.getFrameSize());
                     javafx.application.Platform.runLater(() -> currentTime.set(javafx.util.Duration.seconds(currentSec)));
                 }
 
@@ -183,6 +202,7 @@ public class StandaloneMediaPlayer {
                 }
             } catch (Exception e) {
                 logger.error("Error during playback", e);
+                isPlaying = false;
             } finally {
                 cleanup();
             }
@@ -242,54 +262,18 @@ public class StandaloneMediaPlayer {
     public synchronized void seek(javafx.util.Duration duration) {
         if (currentFile == null) return;
         double seconds = duration.toSeconds();
+        seekSeconds = seconds;
         boolean wasPlaying = isPlaying && !isPaused;
 
         stopThread();
 
-        try {
-            baseStream = AudioSystem.getAudioInputStream(currentFile);
-            AudioFormat baseFormat = baseStream.getFormat();
-            AudioFormat decodedFormat = new AudioFormat(
-                    AudioFormat.Encoding.PCM_SIGNED,
-                    baseFormat.getSampleRate(),
-                    16,
-                    baseFormat.getChannels(),
-                    baseFormat.getChannels() * 2,
-                    baseFormat.getSampleRate(),
-                    false);
-            decodedStream = AudioSystem.getAudioInputStream(decodedFormat, baseStream);
-
-            long byteOffset = (long) (seconds * decodedFormat.getSampleRate() * decodedFormat.getFrameSize());
-            byteOffset = (byteOffset / decodedFormat.getFrameSize()) * decodedFormat.getFrameSize();
-
-            long skipped = 0;
-            while (skipped < byteOffset) {
-                long skipVal = decodedStream.skip(byteOffset - skipped);
-                if (skipVal <= 0) break;
-                skipped += skipVal;
-            }
-
-            currentDecodedBytesRead = skipped;
-            double currentSec = (double) currentDecodedBytesRead / (decodedFormat.getSampleRate() * decodedFormat.getFrameSize());
-            currentTime.set(javafx.util.Duration.seconds(currentSec));
-
-            DataLine.Info info = new DataLine.Info(SourceDataLine.class, decodedFormat);
-            if (line == null) {
-                line = (SourceDataLine) AudioSystem.getLine(info);
-                line.open(decodedFormat);
-            }
-
-            if (wasPlaying) {
-                isPlaying = true;
-                isPaused = false;
-                line.start();
-                setVolume(volume);
-                startPlaybackThread(decodedFormat);
-            } else {
-                isPaused = true;
-            }
-        } catch (Exception e) {
-            logger.error("Error seeking to " + seconds + "s", e);
+        if (wasPlaying) {
+            isPlaying = true;
+            isPaused = false;
+            startPlaybackThread();
+        } else {
+            currentTime.set(duration);
+            isPaused = true;
         }
     }
 
