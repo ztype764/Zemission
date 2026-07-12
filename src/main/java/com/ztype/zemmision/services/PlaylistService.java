@@ -56,8 +56,7 @@ public class PlaylistService {
             // 1. Copy/link original files to staging directory first!
             for (Track track : playlist.getTracks()) {
                 Path source = java.nio.file.Paths.get(track.getFilePath());
-                // Use the original filename, only sanitizing characters unsafe for filesystems
-                String safeFileName = source.getFileName().toString().replaceAll("[^a-zA-Z0-9._()-]", "_");
+                String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_");
                 Path target = playlistDir.resolve(safeFileName);
                 if (!java.nio.file.Files.exists(target)) {
                     try {
@@ -75,7 +74,7 @@ public class PlaylistService {
             // 2. Update the track paths in the playlist object to point to the staging files
             for (Track track : playlist.getTracks()) {
                 Path source = java.nio.file.Paths.get(track.getFilePath());
-                String safeFileName = source.getFileName().toString().replaceAll("[^a-zA-Z0-9._()-]", "_");
+                String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_");
                 Path target = playlistDir.resolve(safeFileName);
                 track.setFilePath(target.toAbsolutePath().toString());
             }
