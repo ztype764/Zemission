@@ -38,8 +38,6 @@ public class TorrentService {
     private final java.util.Set<Integer> allocatedPorts;
     private final java.util.Map<String, java.util.List<Integer>> playlistPorts;
     private final java.util.Map<String, Integer> playlistAcceptorPorts;
-    private final java.util.Map<String, DataDescriptor> clientDataDescriptors;
-    private final java.util.Map<String, Torrent> clientTorrents;
 
     public TorrentService() {
         this.stagingRoot = Paths.get("data", "staging");
@@ -49,8 +47,6 @@ public class TorrentService {
         this.allocatedPorts = java.util.concurrent.ConcurrentHashMap.newKeySet();
         this.playlistPorts = new java.util.concurrent.ConcurrentHashMap<>();
         this.playlistAcceptorPorts = new java.util.concurrent.ConcurrentHashMap<>();
-        this.clientDataDescriptors = new java.util.concurrent.ConcurrentHashMap<>();
-        this.clientTorrents = new java.util.concurrent.ConcurrentHashMap<>();
         try {
             Files.createDirectories(stagingRoot);
             Files.createDirectories(torrentsDir);
@@ -203,36 +199,15 @@ public class TorrentService {
             }
         };
 
-        com.google.inject.Module capturerModule = new com.google.inject.Module() {
-            @Override
-            public void configure(com.google.inject.Binder binder) {
-                binder.bind(String.class).annotatedWith(com.google.inject.name.Names.named("capturer"))
-                      .toProvider(new com.google.inject.Provider<String>() {
-                          @com.google.inject.Inject
-                          private DataDescriptor dataDescriptor;
-
-                          @Override
-                          public String get() {
-                              if (dataDescriptor != null) {
-                                  clientDataDescriptors.put(playlistId, dataDescriptor);
-                              }
-                              return "captured";
-                          }
-                      }).asEagerSingleton();
-            }
-        };
-
         return Bt.client()
                 .config(config)
                 .torrent(torrentFile.toUri().toURL())
                 .storage(storage)
                 .autoLoadModules()
                 .module(dhtModule)
-                .module(capturerModule)
                 .selector(selector)
                 .afterTorrentFetched(t -> {
                     logger.info("Torrent metadata fetched: {}", t.getName());
-                    clientTorrents.put(playlistId, t);
                 })
                 .build();
     }
@@ -244,8 +219,6 @@ public class TorrentService {
             client.stop();
         }
         playlistAcceptorPorts.remove(playlistId);
-        clientDataDescriptors.remove(playlistId);
-        clientTorrents.remove(playlistId);
         java.util.List<Integer> ports = playlistPorts.remove(playlistId);
         if (ports != null) {
             allocatedPorts.removeAll(ports);
@@ -335,9 +308,19 @@ public class TorrentService {
     }
 
     public double getTrackProgress(String playlistId, String trackFileName) {
-        DataDescriptor dataDescriptor = clientDataDescriptors.get(playlistId);
-        Torrent torrent = clientTorrents.get(playlistId);
-        if (dataDescriptor == null || torrent == null) {
+        BtClient client = activeClients.get(playlistId);
+        if (client == null) {
+            return 0.0;
+        }
+
+        bt.processor.torrent.TorrentContext context = getTorrentContext(client);
+        if (context == null) {
+            return 0.0;
+        }
+
+        Torrent torrent = context.getTorrent().orElse(null);
+        bt.data.LocalBitfield bitfield = context.getBitfield();
+        if (torrent == null || bitfield == null) {
             return 0.0;
         }
 
@@ -356,11 +339,24 @@ public class TorrentService {
         }
 
         try {
-            java.util.BitSet filePieces = dataDescriptor.getAllPiecesForFiles(java.util.Collections.singleton(targetFile));
-            bt.data.LocalBitfield bitfield = dataDescriptor.getBitfield();
+            long chunkSize = torrent.getChunkSize();
+            long fileLength = targetFile.getSize();
+            
+            long startOffset = 0;
+            for (TorrentFile f : torrent.getFiles()) {
+                if (f == targetFile) {
+                    break;
+                }
+                startOffset += f.getSize();
+            }
+            long endOffset = startOffset + fileLength;
+            
+            int firstPiece = (int) (startOffset / chunkSize);
+            int lastPiece = (int) ((endOffset - 1) / chunkSize);
+            
             int totalPieces = 0;
             int completedPieces = 0;
-            for (int i = filePieces.nextSetBit(0); i >= 0; i = filePieces.nextSetBit(i + 1)) {
+            for (int i = firstPiece; i <= lastPiece; i++) {
                 totalPieces++;
                 if (bitfield.isComplete(i)) {
                     completedPieces++;
@@ -370,5 +366,27 @@ public class TorrentService {
         } catch (Exception e) {
             return 0.0;
         }
+    }
+
+    private bt.processor.torrent.TorrentContext getTorrentContext(BtClient client) {
+        try {
+            bt.runtime.BtClient delegate = client;
+            if (delegate.getClass().getName().equals("bt.LazyClient")) {
+                java.lang.reflect.Field delegateField = delegate.getClass().getDeclaredField("delegate");
+                delegateField.setAccessible(true);
+                delegate = (bt.runtime.BtClient) delegateField.get(delegate);
+            }
+            if (delegate != null && delegate.getClass().getName().equals("bt.DefaultClient")) {
+                java.lang.reflect.Field contextField = delegate.getClass().getDeclaredField("context");
+                contextField.setAccessible(true);
+                Object context = contextField.get(delegate);
+                if (context instanceof bt.processor.torrent.TorrentContext) {
+                    return (bt.processor.torrent.TorrentContext) context;
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to extract TorrentContext using reflection", e);
+        }
+        return null;
     }
 }
