@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
+import java.io.File;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -105,5 +106,72 @@ class TorrentServiceTest {
         assertNotNull(status);
         assertEquals("Stopped", status.getState());
         assertEquals(0, status.getProgress(), 0.001);
+    }
+
+    @Test
+    void testRealSeederVerification() throws Exception {
+        Path tempStaging = java.nio.file.Files.createTempDirectory("tempStaging");
+        Path tempTorrents = java.nio.file.Files.createTempDirectory("tempTorrents");
+        
+        String playlistId = "test-real-uuid";
+        Path playlistDir = tempStaging.resolve("RealPlaylist_" + playlistId);
+        java.nio.file.Files.createDirectories(playlistDir);
+        
+        Path dummyFile = playlistDir.resolve("dummy.txt");
+        java.nio.file.Files.write(dummyFile, "Hello World! This is dummy content to test seeding verification.".getBytes());
+        Path metaFile = playlistDir.resolve("metadata.json");
+        java.nio.file.Files.write(metaFile, "{}".getBytes());
+        
+        Path torrentFile = tempTorrents.resolve(playlistId + ".torrent");
+        java.util.List<File> files = java.util.Arrays.asList(dummyFile.toFile(), metaFile.toFile());
+        com.turn.ttorrent.common.Torrent.create(
+                playlistDir.toFile(),
+                files,
+                new java.net.URI("udp://tracker.opentrackr.org:1337/announce"),
+                "antigravity-creator").save(new java.io.FileOutputStream(torrentFile.toFile()));
+                
+        TorrentService realService = new TorrentService() {
+            @Override
+            public Path getStagingRoot() {
+                return tempStaging;
+            }
+        };
+        
+        Playlist playlist = new Playlist("RealPlaylist", "Desc");
+        playlist.setId(playlistId);
+        playlist.setTorrentFilePath(torrentFile.toString());
+        
+        realService.startSeeding(playlist);
+        
+        int attempts = 0;
+        double progress = 0;
+        String stateStr = "";
+        while (attempts < 10) {
+            Thread.sleep(1000);
+            ClientStatus status = realService.getClientStatus(playlistId);
+            progress = status.getProgress();
+            stateStr = status.getState();
+            if (progress >= 1.0) {
+                break;
+            }
+            attempts++;
+        }
+        
+        realService.stop(playlistId);
+        
+        // Cleanup temp dirs
+        try {
+            java.nio.file.Files.walk(tempStaging)
+                .sorted(java.util.Comparator.reverseOrder())
+                .map(Path::toFile)
+                .forEach(File::delete);
+            java.nio.file.Files.walk(tempTorrents)
+                .sorted(java.util.Comparator.reverseOrder())
+                .map(Path::toFile)
+                .forEach(File::delete);
+        } catch (Exception ignored) {}
+        
+        assertEquals(1.0, progress, "Seeder progress should be 100% (1.0)");
+        assertEquals("Seeding", stateStr, "Seeder state should be Seeding");
     }
 }

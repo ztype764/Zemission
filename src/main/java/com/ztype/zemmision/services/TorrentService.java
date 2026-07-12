@@ -42,6 +42,7 @@ public class TorrentService {
     private final java.util.Map<String, Boolean> activeModes;
     private final java.util.Map<String, Long> frozenStartTime;
     private final java.util.concurrent.ScheduledExecutorService monitorService;
+    private final java.util.Map<String, Long> lastLogTime;
 
     public TorrentService() {
         this.stagingRoot = Paths.get("data", "staging");
@@ -54,6 +55,7 @@ public class TorrentService {
         this.activePlaylists = new java.util.concurrent.ConcurrentHashMap<>();
         this.activeModes = new java.util.concurrent.ConcurrentHashMap<>();
         this.frozenStartTime = new java.util.concurrent.ConcurrentHashMap<>();
+        this.lastLogTime = new java.util.concurrent.ConcurrentHashMap<>();
         this.monitorService = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "torrent-monitor");
             t.setDaemon(true);
@@ -80,7 +82,10 @@ public class TorrentService {
      */
     public Path createPlaylistTorrent(Playlist playlist) throws IOException {
         logger.debug("Creating torrent for playlist: {}", playlist.getName());
-        Path playlistDir = stagingRoot.resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
+        if (!Files.exists(getStagingRoot())) {
+            Files.createDirectories(getStagingRoot());
+        }
+        Path playlistDir = getStagingRoot().resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
         if (!Files.exists(playlistDir)) {
             Files.createDirectories(playlistDir);
         }
@@ -144,10 +149,16 @@ public class TorrentService {
 
     private void startTorrent(Playlist playlist, boolean sequential) {
         if (activeClients.containsKey(playlist.getId())) {
-            // IF switching from random to sequential, we might want to restart?
-            // For MVP, just return if already active.
-            logger.info("Playlist {} is already active.", playlist.getName());
-            return;
+            Boolean currentSequential = activeModes.get(playlist.getId());
+            if (currentSequential != null && currentSequential == sequential) {
+                logger.info("Playlist {} is already active in the requested mode.", playlist.getName());
+                return;
+            }
+            logger.info("Playlist {} is active in a different mode. Restarting in new mode (sequential={})...", playlist.getName(), sequential);
+            stop(playlist.getId());
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {}
         }
 
         activePlaylists.put(playlist.getId(), playlist);
@@ -155,9 +166,9 @@ public class TorrentService {
 
         logger.info("Starting to {} playlist: {}", sequential ? "stream" : "seed", playlist.getName());
         Path torrentFile = Paths.get(playlist.getTorrentFilePath());
-        Path dataDir = stagingRoot.resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
+        Path dataDir = getStagingRoot().resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
 
-        Storage storage = new FileSystemStorage(dataDir.getParent());
+        Storage storage = getStorage(dataDir.getParent());
 
         java.util.List<Integer> ports = new java.util.ArrayList<>();
         int dhtPort = findFreePort(49001, ports);
@@ -189,11 +200,16 @@ public class TorrentService {
                     clientStates.put(playlist.getId(), state);
                     java.util.Set<bt.net.ConnectionKey> peers = state.getConnectedPeers();
                     if (peers != null && !peers.isEmpty()) {
-                        double pct = (state.getPiecesTotal() > 0) ? ((double) state.getPiecesComplete() / state.getPiecesTotal() * 100.0) : 0.0;
-                        logger.info("Playlist '{}' ({}) - Active Subscribers/Downloaders: {} peers connected. Uploaded: {} bytes, Downloaded: {} bytes, Progress: %.1f%%", 
-                                    playlist.getName(), playlist.getId(), peers.size(), state.getUploaded(), state.getDownloaded(), pct);
-                        for (bt.net.ConnectionKey peerKey : peers) {
-                            logger.info("  -> Subscriber: {} (port {})", peerKey.getPeer().getInetAddress(), peerKey.getRemotePort());
+                        long now = System.currentTimeMillis();
+                        long lastTime = lastLogTime.getOrDefault(playlist.getId(), 0L);
+                        if (now - lastTime >= 10000) {
+                            lastLogTime.put(playlist.getId(), now);
+                            double pct = (state.getPiecesTotal() > 0) ? ((double) state.getPiecesComplete() / state.getPiecesTotal() * 100.0) : 0.0;
+                            logger.info("Playlist '{}' ({}) - Active Subscribers/Downloaders: {} peers connected. Uploaded: {} bytes, Downloaded: {} bytes, Progress: {}%", 
+                                        playlist.getName(), playlist.getId(), peers.size(), state.getUploaded(), state.getDownloaded(), String.format("%.1f", pct));
+                            for (bt.net.ConnectionKey peerKey : peers) {
+                                logger.info("  -> Subscriber: {} (port {})", peerKey.getPeer().getInetAddress(), peerKey.getRemotePort());
+                            }
                         }
                     }
                 }, 1000).join();
@@ -243,6 +259,7 @@ public class TorrentService {
         activePlaylists.remove(playlistId);
         activeModes.remove(playlistId);
         frozenStartTime.remove(playlistId);
+        lastLogTime.remove(playlistId);
         if (client != null) {
             client.stop();
         }
@@ -450,5 +467,9 @@ public class TorrentService {
                 startTorrent(playlist, sequential);
             });
         }
+    }
+
+    protected Storage getStorage(Path dataDir) {
+        return new FileSystemStorage(dataDir);
     }
 }
