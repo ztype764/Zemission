@@ -92,7 +92,7 @@ public class TorrentService {
         // Ensure files are in staging
         for (Track track : playlist.getTracks()) {
             Path source = Paths.get(track.getFilePath());
-            String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_") + getExtension(source.toString());
+            String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_");
             Path target = playlistDir.resolve(safeFileName);
 
             if (!Files.exists(target)) {
