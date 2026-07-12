@@ -202,19 +202,18 @@ public class PlaylistService {
     }
 
     public void play(Playlist playlist) {
-        boolean isLocal = false;
-        // Logic: Checks tracks exist
-        if (playlist.getTracks() != null && !playlist.getTracks().isEmpty()) {
-            String path = playlist.getTracks().get(0).getFilePath();
-            if (path != null && new File(path).exists()) {
-                isLocal = true;
-            }
+        boolean isImported = playlist.getDescription() != null && playlist.getDescription().startsWith("Imported from");
+        
+        boolean isComplete = false;
+        com.ztype.zemmision.services.TorrentService.ClientStatus status = torrentService.getClientStatus(playlist.getId());
+        if (status != null && status.getProgress() >= 1.0) {
+            isComplete = true;
         }
 
         logger.info("Playing playlist {}: Mode={}", playlist.getName(),
-                isLocal ? "Local/Seeding" : "Streaming/Downloading");
+                (!isImported || isComplete) ? "Local/Seeding" : "Streaming/Downloading");
 
-        if (isLocal) {
+        if (!isImported || isComplete) {
             // Owner or fully downloaded: Seed normally
             torrentService.startSeeding(playlist);
         } else {

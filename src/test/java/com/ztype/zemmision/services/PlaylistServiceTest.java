@@ -143,7 +143,7 @@ class PlaylistServiceTest {
 
     @Test
     void testPlay_Imported() {
-        Playlist playlist = new Playlist("Imported", "Desc");
+        Playlist playlist = new Playlist("Imported", "Imported from test.torrent");
         com.ztype.zemmision.models.Track track = new com.ztype.zemmision.models.Track();
         track.setFilePath("/path/to/non/existent/file.mp3");
         playlist.setTracks(Collections.singletonList(track));

@@ -66,8 +66,7 @@ public class TorrentService {
             Files.createDirectories(stagingRoot);
             Files.createDirectories(torrentsDir);
         } catch (IOException e) {
-            logger.error("Failed to create data directories", e);
-            e.printStackTrace();
+            logger.error("Failed to create data directories: {}", e.getMessage());
         }
     }
 
@@ -195,28 +194,40 @@ public class TorrentService {
             activeClients.put(playlist.getId(), client);
 
             CompletableFuture.runAsync(() -> {
-                logger.info("Client started for: {}", playlist.getName());
-                client.startAsync(state -> {
-                    clientStates.put(playlist.getId(), state);
-                    java.util.Set<bt.net.ConnectionKey> peers = state.getConnectedPeers();
-                    if (peers != null && !peers.isEmpty()) {
-                        long now = System.currentTimeMillis();
-                        long lastTime = lastLogTime.getOrDefault(playlist.getId(), 0L);
-                        if (now - lastTime >= 10000) {
-                            lastLogTime.put(playlist.getId(), now);
-                            double pct = (state.getPiecesTotal() > 0) ? ((double) state.getPiecesComplete() / state.getPiecesTotal() * 100.0) : 0.0;
-                            logger.info("Playlist '{}' ({}) - Active Subscribers/Downloaders: {} peers connected. Uploaded: {} bytes, Downloaded: {} bytes, Progress: {}%", 
-                                        playlist.getName(), playlist.getId(), peers.size(), state.getUploaded(), state.getDownloaded(), String.format("%.1f", pct));
-                            for (bt.net.ConnectionKey peerKey : peers) {
-                                logger.info("  -> Subscriber: {} (port {})", peerKey.getPeer().getInetAddress(), peerKey.getRemotePort());
+                try {
+                    logger.info("Client started for: {}", playlist.getName());
+                    client.startAsync(state -> {
+                        clientStates.put(playlist.getId(), state);
+                        java.util.Set<bt.net.ConnectionKey> peers = state.getConnectedPeers();
+                        if (peers != null && !peers.isEmpty()) {
+                            long now = System.currentTimeMillis();
+                            long lastTime = lastLogTime.getOrDefault(playlist.getId(), 0L);
+                            if (now - lastTime >= 10000) {
+                                lastLogTime.put(playlist.getId(), now);
+                                double pct = (state.getPiecesTotal() > 0) ? ((double) state.getPiecesComplete() / state.getPiecesTotal() * 100.0) : 0.0;
+                                logger.info("Playlist '{}' ({}) - Active Subscribers/Downloaders: {} peers connected. Uploaded: {} bytes, Downloaded: {} bytes, Progress: {}%", 
+                                            playlist.getName(), playlist.getId(), peers.size(), state.getUploaded(), state.getDownloaded(), String.format("%.1f", pct));
+                                for (bt.net.ConnectionKey peerKey : peers) {
+                                    logger.info("  -> Subscriber: {} (port {})", peerKey.getPeer().getInetAddress(), peerKey.getRemotePort());
+                                }
                             }
                         }
+                    }, 1000).join();
+                } catch (Exception e) {
+                    Throwable cause = e;
+                    while (cause.getCause() != null) {
+                        cause = cause.getCause();
                     }
-                }, 1000).join();
+                    if (cause instanceof java.net.BindException || (cause.getMessage() != null && (cause.getMessage().contains("Address already in use") || cause.getMessage().contains("bind")))) {
+                        logger.error("Failed to start torrent client for playlist '{}' due to port conflict: Address already in use.", playlist.getName());
+                    } else {
+                        logger.error("Failed to start torrent client for playlist '{}': {}", playlist.getName(), cause.getMessage());
+                    }
+                    stop(playlist.getId());
+                }
             });
         } catch (java.net.MalformedURLException e) {
-            logger.error("Failed to start client", e);
-            e.printStackTrace();
+            logger.error("Failed to start client: {}", e.getMessage());
         }
     }
 
@@ -333,15 +344,27 @@ public class TorrentService {
     private int findFreePort(int startPort, java.util.List<Integer> reservedList) {
         int port = startPort;
         while (port < 65535) {
-            if (!allocatedPorts.contains(port)) {
-                try (java.net.ServerSocket socket = new java.net.ServerSocket(port)) {
+            if (!allocatedPorts.contains(port) && (reservedList == null || !reservedList.contains(port))) {
+                boolean free = false;
+                try (java.net.ServerSocket ss = new java.net.ServerSocket()) {
+                    ss.setReuseAddress(true);
+                    ss.bind(new java.net.InetSocketAddress(port));
+                    
+                    try (java.net.DatagramSocket ds = new java.net.DatagramSocket(null)) {
+                        ds.setReuseAddress(true);
+                        ds.bind(new java.net.InetSocketAddress(port));
+                        free = true;
+                    }
+                } catch (IOException e) {
+                    // Port is in use on TCP or UDP
+                }
+                
+                if (free) {
                     allocatedPorts.add(port);
                     if (reservedList != null) {
                         reservedList.add(port);
                     }
                     return port;
-                } catch (IOException e) {
-                    // Port is in use
                 }
             }
             port++;
