@@ -103,10 +103,6 @@ public class MainController {
     @FXML
     private Button nextTrackButton;
     @FXML
-    private Button skipBackButton;
-    @FXML
-    private Button skipFwdButton;
-    @FXML
     private Button playPauseButton;
     @FXML
     private Label currentTimeLabel;
@@ -175,8 +171,6 @@ public class MainController {
 
             setPngIcon(prevTrackButton, "/icons/previous.png", 24);
             setPngIcon(nextTrackButton, "/icons/next-button.png", 24);
-            setPngIcon(skipBackButton, "/icons/back.png", 24); // Assuming back.png is suitable
-            setPngIcon(skipFwdButton, "/icons/next.png", 24); // Assuming next.png is suitable
 
         } catch (Exception e) {
             logger.error("Failed to load icons", e);
@@ -547,26 +541,51 @@ public class MainController {
         }
 
         // Identify playlist and index
+        // Try viewed playlist first, then playing playlist as fallback
         Optional<Playlist> pOpt = playlistService.getAllPlaylists().stream()
-                .filter(p -> p.getName().equals(playlistTitleLabel.getText()))
+                .filter(p -> p.getName().equals(playlistTitleLabel.getText().replace(" (∞)", "")))
                 .findFirst();
 
-        if (pOpt.isPresent()) {
-            currentPlaylist = pOpt.get();
-            currentTrackIndex = currentPlaylist.getTracks().indexOf(track);
-            // Ensure sequential download / streaming starts
-            playlistService.play(currentPlaylist);
-            // Update last played
-            playlistService.updateLastPlayed(currentPlaylist.getId());
-        } else if (currentPlaylist == null) {
-            // Fallback if user somehow clicked a track without a valid playlist context?
-            return;
+        Playlist resolvedPlaylist = pOpt.orElse(currentPlaylist != null ? currentPlaylist : playingPlaylist);
+        if (resolvedPlaylist == null) return;
+
+        currentPlaylist = resolvedPlaylist;
+        playingPlaylist = resolvedPlaylist;
+        // Use title-based index since Track has no equals() override
+        final String trackTitle = track.getTitle();
+        currentTrackIndex = -1;
+        List<Track> tracks = currentPlaylist.getTracks();
+        for (int i = 0; i < tracks.size(); i++) {
+            if (trackTitle.equals(tracks.get(i).getTitle())) {
+                currentTrackIndex = i;
+                break;
+            }
         }
+        // Ensure sequential download / streaming starts
+        playlistService.play(currentPlaylist);
+        // Update last played
+        playlistService.updateLastPlayed(currentPlaylist.getId());
 
         try {
-            File mediaFile = new File(track.getFilePath());
-            if (!mediaFile.exists()) {
-                showAlert("Buffering", "Streaming has started for this playlist.\nPlease wait a moment for the track to buffer and double-click to play again.");
+            // Trigger path healing for any existing tracks with stale/broken paths
+            playlistService.refreshMetadata(currentPlaylist.getId());
+            // Re-resolve track path from DB in case it was just repaired
+            Track refreshedTrack = currentPlaylist.getTracks().stream()
+                    .filter(t -> t.getTitle().equals(track.getTitle()))
+                    .findFirst()
+                    .orElse(track);
+
+            File mediaFile = new File(refreshedTrack.getFilePath());
+            // Check readiness: use getTrackProgress which has a file-size fallback
+            double progress = playlistService.getTrackProgress(currentPlaylist.getId(), refreshedTrack);
+            boolean fileReady = mediaFile.exists() && mediaFile.length() > 0;
+            if (!fileReady && progress < 1.0) {
+                showAlert("Buffering", "The track is still downloading.\nPlease wait a moment and double-click to play again.");
+                return;
+            }
+            // If file doesn't exist at DB path but progress says complete, try the refreshed path
+            if (!fileReady) {
+                showAlert("Buffering", "The track is still downloading.\nPlease wait a moment and double-click to play again.");
                 return;
             }
 
@@ -644,32 +663,36 @@ public class MainController {
 
     @FXML
     private void handleNext() {
-        if (currentPlaylist == null || currentTrackIndex == -1)
+        Playlist pl = playingPlaylist != null ? playingPlaylist : currentPlaylist;
+        if (pl == null || currentTrackIndex == -1)
             return;
 
-        if (currentTrackIndex < currentPlaylist.getTracks().size() - 1) {
-            playTrack(currentPlaylist.getTracks().get(currentTrackIndex + 1));
+        if (currentTrackIndex < pl.getTracks().size() - 1) {
+            playTrack(pl.getTracks().get(currentTrackIndex + 1));
         } else {
-            // Loop or stop? For now stop.
-            mediaPlayer.stop();
+            // End of playlist — stop
+            if (mediaPlayer != null) {
+                mediaPlayer.stop();
+                mediaPlayer.seek(Duration.ZERO);
+            }
             isPlaying = false;
             updatePlayPauseIcon();
             updatePlaylistHeaderState();
-            mediaPlayer.seek(Duration.ZERO);
         }
     }
 
     @FXML
     private void handlePrevious() {
-        if (currentPlaylist == null || currentTrackIndex == -1)
+        Playlist pl = playingPlaylist != null ? playingPlaylist : currentPlaylist;
+        if (pl == null || currentTrackIndex == -1)
             return;
 
         // If > 3 seconds in, restart track
-        if (mediaPlayer.getCurrentTime().toSeconds() > 3) {
+        if (mediaPlayer != null && mediaPlayer.getCurrentTime().toSeconds() > 3) {
             mediaPlayer.seek(Duration.ZERO);
         } else {
             if (currentTrackIndex > 0) {
-                playTrack(currentPlaylist.getTracks().get(currentTrackIndex - 1));
+                playTrack(pl.getTracks().get(currentTrackIndex - 1));
             }
         }
     }
@@ -689,19 +712,6 @@ public class MainController {
         }
     }
 
-    @FXML
-    private void handleSkipBack() {
-        if (mediaPlayer == null)
-            return;
-        mediaPlayer.seek(mediaPlayer.getCurrentTime().subtract(Duration.seconds(10)));
-    }
-
-    @FXML
-    private void handleSkipFwd() {
-        if (mediaPlayer == null)
-            return;
-        mediaPlayer.seek(mediaPlayer.getCurrentTime().add(Duration.seconds(10)));
-    }
 
     @FXML
     private void handleMute() {

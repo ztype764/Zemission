@@ -156,14 +156,18 @@ public class StandaloneMediaPlayer {
                     long byteOffset = (long) (seekSeconds * decodedFormat.getSampleRate() * decodedFormat.getFrameSize());
                     byteOffset = (byteOffset / decodedFormat.getFrameSize()) * decodedFormat.getFrameSize();
 
-                    long skipped = 0;
-                    while (skipped < byteOffset) {
-                        long skipVal = decodedStream.skip(byteOffset - skipped);
-                        if (skipVal <= 0) break;
-                        skipped += skipVal;
+                    // Must read-and-discard (not skip) for compressed formats like MP3,
+                    // because skip() may return 0 when the decoder hasn't produced data yet.
+                    long discarded = 0;
+                    byte[] skipBuf = new byte[8192];
+                    while (discarded < byteOffset) {
+                        int toRead = (int) Math.min(skipBuf.length, byteOffset - discarded);
+                        int n = decodedStream.read(skipBuf, 0, toRead);
+                        if (n <= 0) break;
+                        discarded += n;
                     }
-                    currentDecodedBytesRead = skipped;
-                    seekSeconds = 0; // reset
+                    currentDecodedBytesRead = discarded;
+                    seekSeconds = 0;
                 }
 
                 byte[] buffer = new byte[4096];
@@ -266,6 +270,13 @@ public class StandaloneMediaPlayer {
         boolean wasPlaying = isPlaying && !isPaused;
 
         stopThread();
+        // Close the old line so the new thread can open a fresh one
+        if (line != null) {
+            try { line.stop(); } catch (Exception ignored) {}
+            try { line.flush(); } catch (Exception ignored) {}
+            try { line.close(); } catch (Exception ignored) {}
+            line = null;
+        }
 
         if (wasPlaying) {
             isPlaying = true;

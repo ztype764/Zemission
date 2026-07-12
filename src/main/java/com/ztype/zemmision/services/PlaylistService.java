@@ -56,7 +56,8 @@ public class PlaylistService {
             // 1. Copy/link original files to staging directory first!
             for (Track track : playlist.getTracks()) {
                 Path source = java.nio.file.Paths.get(track.getFilePath());
-                String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_") + getExtension(source.toString());
+                // Use the original filename, only sanitizing characters unsafe for filesystems
+                String safeFileName = source.getFileName().toString().replaceAll("[^a-zA-Z0-9._()-]", "_");
                 Path target = playlistDir.resolve(safeFileName);
                 if (!java.nio.file.Files.exists(target)) {
                     try {
@@ -74,7 +75,7 @@ public class PlaylistService {
             // 2. Update the track paths in the playlist object to point to the staging files
             for (Track track : playlist.getTracks()) {
                 Path source = java.nio.file.Paths.get(track.getFilePath());
-                String safeFileName = track.getTitle().replaceAll("[^a-zA-Z0-9.-]", "_") + getExtension(source.toString());
+                String safeFileName = source.getFileName().toString().replaceAll("[^a-zA-Z0-9._()-]", "_");
                 Path target = playlistDir.resolve(safeFileName);
                 track.setFilePath(target.toAbsolutePath().toString());
             }
@@ -157,6 +158,29 @@ public class PlaylistService {
                     .resolve(playlist.getName().replaceAll("\\s+", "_") + "_" + playlist.getId());
             File metadataFile = playlistDir.resolve("metadata.json").toFile();
 
+            // Step 1: Rename any .ext.ext double-extension files on disk
+            File[] allFiles = playlistDir.toFile().listFiles();
+            if (allFiles != null) {
+                for (File f : allFiles) {
+                    String name = f.getName();
+                    int lastDot = name.lastIndexOf('.');
+                    if (lastDot > 0) {
+                        String withoutLast = name.substring(0, lastDot);
+                        int secondDot = withoutLast.lastIndexOf('.');
+                        if (secondDot > 0) {
+                            String ext1 = withoutLast.substring(secondDot);
+                            String ext2 = name.substring(lastDot);
+                            if (ext1.equalsIgnoreCase(ext2)) {
+                                File renamed = playlistDir.resolve(withoutLast).toFile();
+                                if (!renamed.exists() && f.renameTo(renamed)) {
+                                    logger.info("Renamed double-ext file: {} -> {}", name, withoutLast);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (metadataFile.exists()) {
                 com.google.gson.Gson gson = new com.google.gson.Gson();
                 Playlist meta = gson.fromJson(new java.io.FileReader(metadataFile), Playlist.class);
@@ -168,23 +192,37 @@ public class PlaylistService {
                     if (meta.getTracks() != null) {
                         List<Track> newTracks = new ArrayList<>();
                         for (Track t : meta.getTracks()) {
-                            // Fix path: point to local staging file
                             String safeName = new File(t.getFilePath()).getName();
                             File localFile = playlistDir.resolve(safeName).toFile();
-                            t.setFilePath(localFile.getAbsolutePath());
+                            File resolved = resolveActualFile(localFile, playlistDir);
+                            t.setFilePath(resolved.getAbsolutePath());
                             newTracks.add(t);
                         }
                         playlist.setTracks(newTracks);
                         changed = true;
                     }
-                } else if (meta.getTracks() != null) {
-                    // Existing tracks: Merge metadata
+                } else {
+                    // Repair existing track paths
                     for (Track localTrack : playlist.getTracks()) {
-                        for (Track remoteTrack : meta.getTracks()) {
-                            if (localTrack.getTitle().equals(remoteTrack.getTitle())) {
-                                localTrack.setArtist(remoteTrack.getArtist());
-                                localTrack.setAlbum(remoteTrack.getAlbum());
+                        File f = new File(localTrack.getFilePath());
+                        if (!f.exists()) {
+                            File repaired = resolveActualFile(f, playlistDir);
+                            if (repaired.exists()) {
+                                localTrack.setFilePath(repaired.getAbsolutePath());
                                 changed = true;
+                                logger.info("Repaired track path: {} -> {}", f.getName(), repaired.getName());
+                            }
+                        }
+                    }
+                    if (meta.getTracks() != null) {
+                        // Merge metadata (artist/album)
+                        for (Track localTrack : playlist.getTracks()) {
+                            for (Track remoteTrack : meta.getTracks()) {
+                                if (localTrack.getTitle().equals(remoteTrack.getTitle())) {
+                                    localTrack.setArtist(remoteTrack.getArtist());
+                                    localTrack.setAlbum(remoteTrack.getAlbum());
+                                    changed = true;
+                                }
                             }
                         }
                     }
@@ -375,7 +413,65 @@ public class PlaylistService {
 
     public double getTrackProgress(String playlistId, Track track) {
         String safeName = new File(track.getFilePath()).getName();
-        return torrentService.getTrackProgress(playlistId, safeName);
+        // First try live torrent client progress
+        double progress = torrentService.getTrackProgress(playlistId, safeName);
+        if (progress > 0.0) {
+            return progress;
+        }
+        // Fallback: if the actual file exists on disk with expected size, it's complete
+        File localFile = new File(track.getFilePath());
+        if (localFile.exists() && localFile.length() > 0
+                && track.getSizeBytes() > 0
+                && localFile.length() >= track.getSizeBytes()) {
+            return 1.0;
+        }
+        // File exists but size unknown - treat as complete if non-empty
+        if (localFile.exists() && localFile.length() > 0 && track.getSizeBytes() <= 0) {
+            return 1.0;
+        }
+        return 0.0;
+    }
+
+    /**
+     * Resolves the actual file on disk. If the given file doesn't exist, scans
+     * the staging directory for a file whose name matches after stripping
+     * double extensions (e.g. "foo.mp3.mp3" -> "foo.mp3") or vice versa.
+     */
+    private File resolveActualFile(File file, Path stagingDir) {
+        if (file.exists()) return file;
+
+        String name = file.getName();
+
+        // Try stripping a doubled extension (e.g. "song.mp3.mp3" -> "song.mp3")
+        int lastDot = name.lastIndexOf('.');
+        if (lastDot > 0) {
+            String withoutLast = name.substring(0, lastDot);
+            int secondDot = withoutLast.lastIndexOf('.');
+            if (secondDot > 0) {
+                String ext1 = withoutLast.substring(secondDot);
+                String ext2 = name.substring(lastDot);
+                if (ext1.equals(ext2)) {
+                    File candidate = stagingDir.resolve(withoutLast).toFile();
+                    if (candidate.exists()) return candidate;
+                }
+            }
+        }
+
+        // Try adding a doubled extension (e.g. "song.mp3" -> "song.mp3.mp3")
+        File doubleExt = stagingDir.resolve(name + getExtension(name)).toFile();
+        if (doubleExt.exists()) return doubleExt;
+
+        // Scan the staging dir for any file matching the base name (ignoring extension variation)
+        File[] files = stagingDir.toFile().listFiles();
+        if (files != null) {
+            String baseName = name.replaceAll("\\.[^.]+$", ""); // strip last extension
+            for (File f : files) {
+                if (f.getName().startsWith(baseName) && !f.getName().equals("metadata.json")) {
+                    return f;
+                }
+            }
+        }
+        return file; // Return original even if not found; caller checks .exists()
     }
 
     private String getExtension(String path) {
