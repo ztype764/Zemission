@@ -318,4 +318,9 @@ public class PlaylistService {
         // Remove from DB
         databaseService.deletePlaylist(playlistId);
     }
+
+    public double getTrackProgress(String playlistId, Track track) {
+        String safeName = new File(track.getFilePath()).getName();
+        return torrentService.getTrackProgress(playlistId, safeName);
+    }
 }

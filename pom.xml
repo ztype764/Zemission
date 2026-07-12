@@ -111,6 +111,13 @@
             <version>1.5</version>
         </dependency>
 
+        <!-- Pure Java MP3 decoder SPI -->
+        <dependency>
+            <groupId>com.googlecode.soundlibs</groupId>
+            <artifactId>mp3spi</artifactId>
+            <version>1.9.5.4</version>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

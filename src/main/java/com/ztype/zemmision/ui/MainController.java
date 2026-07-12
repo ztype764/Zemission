@@ -13,8 +13,7 @@ import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
 
 import javafx.scene.layout.VBox;
-import javafx.scene.media.Media;
-import javafx.scene.media.MediaPlayer;
+import com.ztype.zemmision.utils.StandaloneMediaPlayer;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.stage.FileChooser;
@@ -124,7 +123,7 @@ public class MainController {
     private PlaylistService playlistService;
 
     // Player State
-    private MediaPlayer mediaPlayer;
+    private StandaloneMediaPlayer mediaPlayer;
     private Playlist currentPlaylist; // The one currently VIEWED
     private Playlist playingPlaylist; // The one currently PLAYING audio
     private int currentTrackIndex = -1;
@@ -320,6 +319,15 @@ public class MainController {
 
         trackSizeColumn.setCellValueFactory(cellData -> new SimpleStringProperty(
                 String.format("%.2f MB", cellData.getValue().getSizeBytes() / (1024.0 * 1024.0))));
+
+        TableColumn<Track, String> trackProgressColumn = new TableColumn<>("Status");
+        trackProgressColumn.setPrefWidth(140);
+        trackProgressColumn.setCellValueFactory(cellData -> {
+            Track track = cellData.getValue();
+            double progress = playlistService.getTrackProgress(currentPlaylist.getId(), track);
+            return new SimpleStringProperty(formatTrackStatus(progress, track));
+        });
+        tracksTableView.getColumns().add(trackProgressColumn);
 
         tracksTableView.setRowFactory(tv -> {
             TableRow<Track> row = new TableRow<>();
@@ -554,8 +562,7 @@ public class MainController {
                 return;
             }
 
-            Media media = new Media(mediaFile.toURI().toString());
-            mediaPlayer = new MediaPlayer(media);
+            mediaPlayer = new StandaloneMediaPlayer(mediaFile);
 
             mediaPlayer.currentTimeProperty().addListener((obs, old, time) -> {
                 if (!isSeeking) {
@@ -581,15 +588,6 @@ public class MainController {
             updatePlayPauseIcon();
             updatePlaylistHeaderState(); // Refresh header
 
-        } catch (javafx.scene.media.MediaException e) {
-            logger.error("Failed to initialize media player", e);
-            String os = System.getProperty("os.name").toLowerCase();
-            String msg = "Could not play track: " + e.getMessage();
-            if (os.contains("linux")) {
-                msg += "\n\nOn Linux, this often means missing GStreamer codecs.\n" +
-                        "Run: sudo apt-get install libavcodec-extra gstreamer1.0-libav gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly";
-            }
-            showAlert("Media Error", msg);
         } catch (Exception e) {
             logger.error("Failed to play track: {}", track.getTitle(), e);
             showAlert("Error", "Could not play track: " + e.getMessage());
@@ -874,6 +872,10 @@ public class MainController {
                 showPlaylist(currentPlaylist.getName());
             }
         }
+
+        if (playlistView.isVisible()) {
+            tracksTableView.refresh();
+        }
     }
 
     private void showAlert(String title, String content) {
@@ -917,6 +919,23 @@ public class MainController {
 
         public StringProperty speedProperty() {
             return speed;
+        }
+    }
+
+    private String formatTrackStatus(double progress, Track track) {
+        if (currentPlaylist == null) return "";
+        boolean isLocal = !track.getFilePath().contains("data/staging") && !track.getFilePath().contains("data\\staging");
+        if (isLocal) {
+            return "Local (100%)";
+        }
+        TorrentService.ClientStatus status = playlistService.getTransferStatus(currentPlaylist.getId());
+        String state = status.getState();
+        if (progress >= 1.0) {
+            return "Complete (100%)";
+        } else if ("Stopped".equals(state)) {
+            return "Stopped";
+        } else {
+            return String.format("Downloading (%.1f%%)", progress * 100);
         }
     }
 }

@@ -8,8 +8,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
 import javafx.scene.control.ListCell;
-import javafx.scene.media.Media;
-import javafx.scene.media.MediaPlayer;
+import com.ztype.zemmision.utils.StandaloneMediaPlayer;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import java.io.File;
@@ -26,7 +25,7 @@ public class PlayerController {
     private Button playPauseButton;
 
     private final PlaylistService playlistService;
-    private MediaPlayer mediaPlayer;
+    private StandaloneMediaPlayer mediaPlayer;
     private Playlist currentPlaylist;
 
     public PlayerController() {
@@ -108,16 +107,10 @@ public class PlayerController {
             mediaPlayer.stop();
         }
 
-        // For local simulation, we assume file exists at filePath.
-        // In real streaming, this needs to point to the partially downloaded file in
-        // staging.
-        // For "My Playlist", filePath is absolute original path.
-        // For imported playlists, we'd need to resolve from staging.
         try {
             File file = new File(track.getFilePath());
             if (file.exists()) {
-                Media media = new Media(file.toURI().toString());
-                mediaPlayer = new MediaPlayer(media);
+                mediaPlayer = new StandaloneMediaPlayer(file);
                 mediaPlayer.play();
                 currentTrackLabel.setText("Playing: " + track.getTitle());
                 setPngIcon(playPauseButton, "/icons/pause.png", 16);
@@ -143,7 +136,7 @@ public class PlayerController {
     @FXML
     private void handlePlayPause() {
         if (mediaPlayer != null) {
-            if (mediaPlayer.getStatus() == MediaPlayer.Status.PLAYING) {
+            if (mediaPlayer.isPlaying()) {
                 mediaPlayer.pause();
                 setPngIcon(playPauseButton, "/icons/play-button.png", 16);
             } else {

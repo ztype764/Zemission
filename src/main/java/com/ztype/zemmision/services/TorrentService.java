@@ -9,6 +9,9 @@ import bt.dht.DHTConfig;
 import bt.dht.DHTModule;
 import bt.runtime.BtClient;
 import bt.torrent.TorrentSessionState;
+import bt.metainfo.Torrent;
+import bt.metainfo.TorrentFile;
+import bt.data.DataDescriptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import bt.torrent.selector.SequentialSelector;
@@ -35,6 +38,8 @@ public class TorrentService {
     private final java.util.Set<Integer> allocatedPorts;
     private final java.util.Map<String, java.util.List<Integer>> playlistPorts;
     private final java.util.Map<String, Integer> playlistAcceptorPorts;
+    private final java.util.Map<String, DataDescriptor> clientDataDescriptors;
+    private final java.util.Map<String, Torrent> clientTorrents;
 
     public TorrentService() {
         this.stagingRoot = Paths.get("data", "staging");
@@ -44,6 +49,8 @@ public class TorrentService {
         this.allocatedPorts = java.util.concurrent.ConcurrentHashMap.newKeySet();
         this.playlistPorts = new java.util.concurrent.ConcurrentHashMap<>();
         this.playlistAcceptorPorts = new java.util.concurrent.ConcurrentHashMap<>();
+        this.clientDataDescriptors = new java.util.concurrent.ConcurrentHashMap<>();
+        this.clientTorrents = new java.util.concurrent.ConcurrentHashMap<>();
         try {
             Files.createDirectories(stagingRoot);
             Files.createDirectories(torrentsDir);
@@ -196,15 +203,36 @@ public class TorrentService {
             }
         };
 
+        com.google.inject.Module capturerModule = new com.google.inject.Module() {
+            @Override
+            public void configure(com.google.inject.Binder binder) {
+                binder.bind(String.class).annotatedWith(com.google.inject.name.Names.named("capturer"))
+                      .toProvider(new com.google.inject.Provider<String>() {
+                          @com.google.inject.Inject
+                          private DataDescriptor dataDescriptor;
+
+                          @Override
+                          public String get() {
+                              if (dataDescriptor != null) {
+                                  clientDataDescriptors.put(playlistId, dataDescriptor);
+                              }
+                              return "captured";
+                          }
+                      }).asEagerSingleton();
+            }
+        };
+
         return Bt.client()
                 .config(config)
                 .torrent(torrentFile.toUri().toURL())
                 .storage(storage)
                 .autoLoadModules()
                 .module(dhtModule)
+                .module(capturerModule)
                 .selector(selector)
                 .afterTorrentFetched(t -> {
                     logger.info("Torrent metadata fetched: {}", t.getName());
+                    clientTorrents.put(playlistId, t);
                 })
                 .build();
     }
@@ -216,6 +244,8 @@ public class TorrentService {
             client.stop();
         }
         playlistAcceptorPorts.remove(playlistId);
+        clientDataDescriptors.remove(playlistId);
+        clientTorrents.remove(playlistId);
         java.util.List<Integer> ports = playlistPorts.remove(playlistId);
         if (ports != null) {
             allocatedPorts.removeAll(ports);
@@ -302,5 +332,43 @@ public class TorrentService {
             port++;
         }
         return startPort;
+    }
+
+    public double getTrackProgress(String playlistId, String trackFileName) {
+        DataDescriptor dataDescriptor = clientDataDescriptors.get(playlistId);
+        Torrent torrent = clientTorrents.get(playlistId);
+        if (dataDescriptor == null || torrent == null) {
+            return 0.0;
+        }
+
+        TorrentFile targetFile = null;
+        for (TorrentFile f : torrent.getFiles()) {
+            java.util.List<String> pathElements = f.getPathElements();
+            String name = pathElements.isEmpty() ? "" : pathElements.get(pathElements.size() - 1);
+            if (name.equals(trackFileName)) {
+                targetFile = f;
+                break;
+            }
+        }
+
+        if (targetFile == null) {
+            return 0.0;
+        }
+
+        try {
+            java.util.BitSet filePieces = dataDescriptor.getAllPiecesForFiles(java.util.Collections.singleton(targetFile));
+            bt.data.LocalBitfield bitfield = dataDescriptor.getBitfield();
+            int totalPieces = 0;
+            int completedPieces = 0;
+            for (int i = filePieces.nextSetBit(0); i >= 0; i = filePieces.nextSetBit(i + 1)) {
+                totalPieces++;
+                if (bitfield.isComplete(i)) {
+                    completedPieces++;
+                }
+            }
+            return (totalPieces > 0) ? (double) completedPieces / totalPieces : 0.0;
+        } catch (Exception e) {
+            return 0.0;
+        }
     }
 }
