@@ -748,6 +748,36 @@ public class MainController {
         }
     }
 
+    public boolean handleExitRequest() {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Exit Confirmation");
+        alert.setHeaderText("Exit Zemmision?");
+        alert.setContentText("Are you sure you want to exit the application?\nAll active streaming, seeding, and downloads will be stopped.");
+
+        Optional<ButtonType> result = alert.showAndWait();
+        if (result.isPresent() && result.get() == ButtonType.OK) {
+            logger.info("Exit confirmed. Shutting down media player and torrent clients...");
+            if (mediaPlayer != null) {
+                try {
+                    mediaPlayer.stop();
+                    mediaPlayer.dispose();
+                } catch (Exception ignored) {}
+            }
+            if (playlistService != null) {
+                playlistService.shutdown();
+            }
+            // Wait briefly to allow async port unmapping packets to go out
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {}
+
+            javafx.application.Platform.exit();
+            System.exit(0);
+            return true;
+        }
+        return false;
+    }
+
     // --- Action Handlers (Create, Import, Export, Restart) ---
 
     @FXML

@@ -22,6 +22,17 @@ public class Main extends Application {
             primaryStage.setTitle("Zemmision Audio Streamer");
             Scene scene = new Scene(root, 800, 600);
             primaryStage.setScene(scene);
+
+            // Retrieve controller to bind close request
+            com.ztype.zemmision.ui.MainController controller = loader.getController();
+            primaryStage.setOnCloseRequest(event -> {
+                if (controller != null) {
+                    if (!controller.handleExitRequest()) {
+                        event.consume();
+                    }
+                }
+            });
+
             primaryStage.show();
 
             startCssHotReload(root, scene);

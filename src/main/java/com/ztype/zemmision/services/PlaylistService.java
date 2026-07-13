@@ -473,6 +473,15 @@ public class PlaylistService {
         return file; // Return original even if not found; caller checks .exists()
     }
 
+    public void shutdown() {
+        logger.info("Shutting down PlaylistService...");
+        try {
+            torrentService.stopAll();
+        } catch (Exception e) {
+            logger.error("Error shutting down TorrentService: {}", e.getMessage());
+        }
+    }
+
     private String getExtension(String path) {
         int i = path.lastIndexOf('.');
         return (i > 0) ? path.substring(i) : "";

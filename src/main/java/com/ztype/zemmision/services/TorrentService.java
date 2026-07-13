@@ -43,6 +43,9 @@ public class TorrentService {
     private final java.util.Map<String, Long> frozenStartTime;
     private final java.util.concurrent.ScheduledExecutorService monitorService;
     private final java.util.Map<String, Long> lastLogTime;
+    private final java.util.Map<String, com.offbynull.portmapper.mapper.MappedPort> activePortMappings = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, com.offbynull.portmapper.mapper.PortMapper> activePortMappers = new java.util.concurrent.ConcurrentHashMap<>();
+    protected boolean enablePortMapping = true;
 
     public TorrentService() {
         this.stagingRoot = Paths.get("data", "staging");
@@ -186,6 +189,9 @@ public class TorrentService {
         int acceptorPort = findFreePort(6891, ports);
         playlistPorts.put(playlist.getId(), ports);
         playlistAcceptorPorts.put(playlist.getId(), acceptorPort);
+        if (enablePortMapping) {
+            mapPortAsync(playlist.getId(), acceptorPort);
+        }
 
         try {
             BtClient client = buildClient(storage, dhtModule, torrentFile,
@@ -280,6 +286,36 @@ public class TorrentService {
             allocatedPorts.removeAll(ports);
             logger.info("Released ports {} for playlist ID: {}", ports, playlistId);
         }
+
+        // Release UPnP port mapping if active
+        com.offbynull.portmapper.mapper.MappedPort mappedPort = activePortMappings.remove(playlistId);
+        com.offbynull.portmapper.mapper.PortMapper mapper = activePortMappers.remove(playlistId);
+        if (mappedPort != null && mapper != null) {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    logger.info("Releasing UPnP/NAT-PMP port mapping for playlist {}...", playlistId);
+                    mapper.unmapPort(mappedPort);
+                    logger.info("UPnP/NAT-PMP port mapping released successfully.");
+                } catch (Exception e) {
+                    logger.warn("Failed to release UPnP/NAT-PMP port mapping: {}", e.getMessage());
+                }
+            });
+        }
+    }
+
+    public void stopAll() {
+        logger.info("Stopping all active torrent clients...");
+        java.util.List<String> activeIds = new java.util.ArrayList<>(activeClients.keySet());
+        for (String id : activeIds) {
+            try {
+                stop(id);
+            } catch (Exception e) {
+                logger.error("Error stopping torrent client {}: {}", id, e.getMessage());
+            }
+        }
+        try {
+            monitorService.shutdown();
+        } catch (Exception ignored) {}
     }
 
     public ClientStatus getClientStatus(String playlistId) {
@@ -330,6 +366,40 @@ public class TorrentService {
         public String getState() {
             return state;
         }
+    }
+
+    private void mapPortAsync(String playlistId, int port) {
+        CompletableFuture.runAsync(() -> {
+            logger.info("Attempting UPnP/NAT-PMP port mapping for port {}...", port);
+            try {
+                com.offbynull.portmapper.gateway.Gateway network =
+                        com.offbynull.portmapper.gateways.network.NetworkGateway.create();
+                com.offbynull.portmapper.gateway.Gateway process =
+                        com.offbynull.portmapper.gateways.process.ProcessGateway.create();
+
+                com.offbynull.portmapper.gateway.Bus networkBus = network.getBus();
+                com.offbynull.portmapper.gateway.Bus processBus = process.getBus();
+
+                java.util.List<com.offbynull.portmapper.mapper.PortMapper> mappers =
+                        com.offbynull.portmapper.PortMapperFactory.discover(networkBus, processBus);
+
+                if (!mappers.isEmpty()) {
+                    com.offbynull.portmapper.mapper.PortMapper mapper = mappers.get(0);
+                    logger.info("Found port forwarding device: {}", mapper.getClass().getSimpleName());
+
+                    com.offbynull.portmapper.mapper.MappedPort mappedPort =
+                            mapper.mapPort(com.offbynull.portmapper.mapper.PortType.TCP, port, port, 3600);
+
+                    activePortMappings.put(playlistId, mappedPort);
+                    activePortMappers.put(playlistId, mapper);
+                    logger.info("Successfully mapped external port {} to internal port {} via {}", port, port, mapper.getClass().getSimpleName());
+                } else {
+                    logger.info("No UPnP/NAT-PMP port forwarding devices found.");
+                }
+            } catch (Exception e) {
+                logger.warn("UPnP/NAT-PMP port mapping failed for port {}: {}", port, e.getMessage());
+            }
+        });
     }
 
     private String getExtension(String path) {

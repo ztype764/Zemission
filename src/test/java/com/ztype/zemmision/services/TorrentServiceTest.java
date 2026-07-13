@@ -38,6 +38,9 @@ class TorrentServiceTest {
 
         // Override buildClient directly without Spy to avoid JDK/Mockito issues
         torrentService = new TorrentService() {
+            {
+                enablePortMapping = false;
+            }
             @Override
             protected BtClient buildClient(bt.data.Storage storage, bt.dht.DHTModule dhtModule, Path torrentFile,
                     PieceSelector selector) {
@@ -131,6 +134,9 @@ class TorrentServiceTest {
                 "antigravity-creator").save(new java.io.FileOutputStream(torrentFile.toFile()));
                 
         TorrentService realService = new TorrentService() {
+            {
+                enablePortMapping = false;
+            }
             @Override
             public Path getStagingRoot() {
                 return tempStaging;
